@@ -1286,6 +1286,9 @@ func (c *Controller) startVMI(vm *virtv1.VirtualMachine) (*virtv1.VirtualMachine
 
 	// start it
 	vmi := SetupVMIFromVM(vm)
+	if err := c.refreshVMIHibernationPVCIdentities(vm, vmi); err != nil {
+		return vm, err
+	}
 	vmRevisionName, err := c.createVMRevision(vm)
 	if err != nil {
 		log.Log.Object(vm).Reason(err).Error(failedCreateCRforVmErrMsg)

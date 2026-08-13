@@ -264,6 +264,22 @@ func (c *Controller) hibernationPVCIdentities(vm *virtv1.VirtualMachine) (map[st
 	return identities, nil
 }
 
+func (c *Controller) refreshVMIHibernationPVCIdentities(vm *virtv1.VirtualMachine, vmi *virtv1.VirtualMachineInstance) error {
+	if vm.Annotations[hibernation.StateAnnotation] != hibernation.StateRestoring {
+		return nil
+	}
+	identities, err := c.hibernationPVCIdentities(vm)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(identities)
+	if err != nil {
+		return err
+	}
+	vmi.Annotations[hibernation.PVCIdentitiesAnnotation] = string(payload)
+	return nil
+}
+
 func setOrDelete(values map[string]string, key, value string) {
 	if value == "" {
 		delete(values, key)

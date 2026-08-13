@@ -19,9 +19,13 @@
 package vm
 
 import (
+	"encoding/json"
 	"testing"
 
+	k8score "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache"
 
 	v1 "kubevirt.io/api/core/v1"
 
@@ -63,6 +67,40 @@ func TestRestoreVMIStartsWithRestoreInsteadOfColdSync(t *testing.T) {
 	}
 	if vmi.Annotations[hibernation.StatePVCAnnotation] != "state" {
 		t.Fatal("state PVC identity was not propagated before pod rendering")
+	}
+}
+
+func TestRestoreRefreshesCurrentPVCIdentityBeforeLauncherCreation(t *testing.T) {
+	volumeMode := k8score.PersistentVolumeFilesystem
+	store := cache.NewStore(cache.MetaNamespaceKeyFunc)
+	if err := store.Add(&k8score.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "substitute", UID: types.UID("new-pvc-uid")},
+		Spec: k8score.PersistentVolumeClaimSpec{
+			VolumeMode: &volumeMode,
+			VolumeName: "new-pv",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controller := &Controller{pvcStore: store}
+	vm := &v1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Annotations: map[string]string{
+			hibernation.StateAnnotation:         hibernation.StateRestoring,
+			hibernation.StatePVCAnnotation:      "substitute",
+			hibernation.PVCIdentitiesAnnotation: `{"state":"old-pvc-uid/old-pv"}`,
+		}},
+		Spec: v1.VirtualMachineSpec{Template: &v1.VirtualMachineInstanceTemplateSpec{}},
+	}
+	vmi := SetupVMIFromVM(vm)
+	if err := controller.refreshVMIHibernationPVCIdentities(vm, vmi); err != nil {
+		t.Fatal(err)
+	}
+	identities := map[string]string{}
+	if err := json.Unmarshal([]byte(vmi.Annotations[hibernation.PVCIdentitiesAnnotation]), &identities); err != nil {
+		t.Fatal(err)
+	}
+	if identities["state"] != "new-pvc-uid/new-pv" {
+		t.Fatalf("expected current substituted PVC identity, got %q", identities["state"])
 	}
 }
 
