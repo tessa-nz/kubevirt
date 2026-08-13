@@ -96,3 +96,19 @@ func TestSyncHibernationCommitsAndUnpausesOnlyAfterSeparateDispatch(t *testing.T
 		t.Fatalf("unexpected state %q", vmi.Annotations[hibernation.StateAnnotation])
 	}
 }
+
+func TestHibernationRequestBypassesPhaseOptimization(t *testing.T) {
+	vmi := &v1.VirtualMachineInstance{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			hibernation.RequestAnnotation: hibernation.RequestCommitUnpause,
+		}},
+		Status: v1.VirtualMachineInstanceStatus{Phase: v1.Scheduled},
+	}
+	if !shouldProcessVMIUpdate(vmi, v1.Running) {
+		t.Fatal("commit-unpause must be processed while the restored VMI is still Scheduled")
+	}
+	delete(vmi.Annotations, hibernation.RequestAnnotation)
+	if shouldProcessVMIUpdate(vmi, v1.Running) {
+		t.Fatal("ordinary updates must retain the phase optimization")
+	}
+}

@@ -1556,7 +1556,7 @@ func (c *VirtualMachineController) sync(key string,
 		if err != nil {
 			return err
 		}
-		if vmi.Status.Phase == phase {
+		if shouldProcessVMIUpdate(vmi, phase) {
 			shouldUpdate = true
 		}
 
@@ -1625,6 +1625,10 @@ func (c *VirtualMachineController) sync(key string,
 	c.logger.Object(vmi).V(3).Info("Synchronization loop succeeded.")
 	return nil
 
+}
+
+func shouldProcessVMIUpdate(vmi *v1.VirtualMachineInstance, calculatedPhase v1.VirtualMachineInstancePhase) bool {
+	return vmi.Status.Phase == calculatedPhase || vmi.Annotations[hibernation.RequestAnnotation] != ""
 }
 
 func (c *VirtualMachineController) processVmCleanup(vmi *v1.VirtualMachineInstance) error {
