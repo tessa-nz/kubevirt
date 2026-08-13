@@ -343,10 +343,16 @@ func (l *LibvirtDomainManager) commitAndUnpauseVMI(vmi *v1.VirtualMachineInstanc
 	if !cli.IsPaused(state) {
 		return nil, "", fmt.Errorf("restored domain must be paused before consumption")
 	}
+	if annotation(vmi, hibernation.LabFailBeforeConsumeAnnotation) == metadata.AttemptID {
+		return nil, "", fmt.Errorf("%s: injected failure before consumed marker", hibernation.StateRestoreCommitLost)
+	}
 	metadata.Consumed = true
 	metadata.ConsumedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := writeHibernationMetadata(statePath, metadata); err != nil {
 		return nil, "", err
+	}
+	if annotation(vmi, hibernation.LabFailAfterConsumeAnnotation) == metadata.AttemptID {
+		return nil, "", fmt.Errorf("%s: injected failure after consumed marker before unpause", hibernation.StateRestoreCommitLost)
 	}
 	if err := domain.Resume(); err != nil {
 		return nil, "", fmt.Errorf("%s: consumption committed but unpause failed: %w", hibernation.StateRestoreCommitLost, err)

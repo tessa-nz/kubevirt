@@ -2202,16 +2202,6 @@ func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClie
 		vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
 		return err
 	}
-	if action == cmdv1.HibernationAction_HIBERNATION_ACTION_RESTORE_PAUSED &&
-		response != nil && response.Phase == hibernation.StateRestoredPaused {
-		response, err = client.HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE, filepath.Join(hibernation.StateMountPath, "state.save"), false)
-		if err != nil {
-			vmi.Annotations[hibernation.StateAnnotation] = hibernation.StateRestoreCommitLost
-			vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
-			return err
-		}
-		successState = hibernation.StateRunningAwaitingVerification
-	}
 	vmi.Annotations[hibernation.StateAnnotation] = successState
 	delete(vmi.Annotations, hibernation.RequestAnnotation)
 	delete(vmi.Annotations, hibernation.ErrorAnnotation)

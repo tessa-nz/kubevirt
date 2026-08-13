@@ -1910,6 +1910,8 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 		hibernation.VMUIDAnnotation,
 		hibernation.PVCIdentitiesAnnotation,
 		hibernation.LabAllowKernelMismatchAnnotation,
+		hibernation.LabFailBeforeConsumeAnnotation,
+		hibernation.LabFailAfterConsumeAnnotation,
 	} {
 		if value := vm.Annotations[key]; value != "" {
 			vmi.Annotations[key] = value

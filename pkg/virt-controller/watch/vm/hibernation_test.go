@@ -52,12 +52,14 @@ func TestRestoreVMIStartsWithRestoreInsteadOfColdSync(t *testing.T) {
 	strategy := v1.RunStrategyAlways
 	vm := &v1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-			hibernation.StatePVCAnnotation:      "state",
-			hibernation.StateAnnotation:         hibernation.StateRestoring,
-			hibernation.RequestAnnotation:       hibernation.RequestResume,
-			hibernation.AttemptAnnotation:       "attempt",
-			hibernation.VMUIDAnnotation:         "vm-uid",
-			hibernation.PVCIdentitiesAnnotation: `{"state":"pvc-uid/pv"}`,
+			hibernation.StatePVCAnnotation:             "state",
+			hibernation.StateAnnotation:                hibernation.StateRestoring,
+			hibernation.RequestAnnotation:              hibernation.RequestResume,
+			hibernation.AttemptAnnotation:              "attempt",
+			hibernation.VMUIDAnnotation:                "vm-uid",
+			hibernation.PVCIdentitiesAnnotation:        `{"state":"pvc-uid/pv"}`,
+			hibernation.LabFailBeforeConsumeAnnotation: "attempt",
+			hibernation.LabFailAfterConsumeAnnotation:  "attempt",
 		}},
 		Spec: v1.VirtualMachineSpec{RunStrategy: &strategy, Template: &v1.VirtualMachineInstanceTemplateSpec{}},
 	}
@@ -67,6 +69,10 @@ func TestRestoreVMIStartsWithRestoreInsteadOfColdSync(t *testing.T) {
 	}
 	if vmi.Annotations[hibernation.StatePVCAnnotation] != "state" {
 		t.Fatal("state PVC identity was not propagated before pod rendering")
+	}
+	if vmi.Annotations[hibernation.LabFailBeforeConsumeAnnotation] != "attempt" ||
+		vmi.Annotations[hibernation.LabFailAfterConsumeAnnotation] != "attempt" {
+		t.Fatal("lab consumed-marker fault injection was not propagated to the restore VMI")
 	}
 }
 

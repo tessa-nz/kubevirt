@@ -67,17 +67,29 @@ func TestSyncHibernationCommitFailureIsTerminal(t *testing.T) {
 	}
 }
 
-func TestSyncHibernationRestoresPausedBeforeCommitAndUnpause(t *testing.T) {
+func TestSyncHibernationPublishesPausedRestoreBeforeCommitAndUnpause(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	client := cmdclient.NewMockLauncherClient(ctrl)
 	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}}}
-	first := client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_RESTORE_PAUSED, hibernation.StateMountPath+"/state.save", false).
+	client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_RESTORE_PAUSED, hibernation.StateMountPath+"/state.save", false).
 		Return(&cmdv1.HibernationResponse{Phase: hibernation.StateRestoredPaused}, nil)
-	client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE, hibernation.StateMountPath+"/state.save", false).
-		After(first).
-		Return(&cmdv1.HibernationResponse{Phase: hibernation.StateRunningAwaitingVerification}, nil)
 	controller := &VirtualMachineController{}
 	if err := controller.syncHibernation(client, vmi, hibernation.RequestRestorePaused); err != nil {
+		t.Fatal(err)
+	}
+	if vmi.Annotations[hibernation.StateAnnotation] != hibernation.StateRestoredPaused {
+		t.Fatalf("unexpected state %q", vmi.Annotations[hibernation.StateAnnotation])
+	}
+}
+
+func TestSyncHibernationCommitsAndUnpausesOnlyAfterSeparateDispatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := cmdclient.NewMockLauncherClient(ctrl)
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}}}
+	client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE, hibernation.StateMountPath+"/state.save", false).
+		Return(&cmdv1.HibernationResponse{Phase: hibernation.StateRunningAwaitingVerification}, nil)
+	controller := &VirtualMachineController{}
+	if err := controller.syncHibernation(client, vmi, hibernation.RequestCommitUnpause); err != nil {
 		t.Fatal(err)
 	}
 	if vmi.Annotations[hibernation.StateAnnotation] != hibernation.StateRunningAwaitingVerification {

@@ -182,3 +182,79 @@ func TestEjectTransientCloudInitMedia(t *testing.T) {
 		t.Fatalf("cloud-init CD-ROM device was removed instead of ejected: %s", updated)
 	}
 }
+
+func TestCommitFailureBeforeConsumedMarkerIsTerminalAndUnconsumed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	connection := cli.NewMockConnection(ctrl)
+	domain := cli.NewMockVirDomain(ctrl)
+	manager := &LibvirtDomainManager{virConn: connection}
+	statePath := filepath.Join(t.TempDir(), "state.save")
+	metadata := &hibernation.Metadata{AttemptID: "attempt-1"}
+	if err := writeHibernationMetadata(statePath, metadata); err != nil {
+		t.Fatal(err)
+	}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "default",
+		Name:      "tracer",
+		Annotations: map[string]string{
+			hibernation.AttemptAnnotation:              "attempt-1",
+			hibernation.LabFailBeforeConsumeAnnotation: "attempt-1",
+		},
+	}}
+	connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+	domain.EXPECT().GetState().Return(libvirt.DOMAIN_PAUSED, 0, nil)
+	domain.EXPECT().Free().Return(nil)
+
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || !strings.Contains(err.Error(), hibernation.StateRestoreCommitLost) {
+		t.Fatalf("expected terminal injected failure before consumption, got %v", err)
+	}
+	committed, err := readHibernationMetadata(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.Consumed {
+		t.Fatal("failure before marker consumed the artifact")
+	}
+}
+
+func TestCommitFailureAfterConsumedMarkerCannotReplay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	connection := cli.NewMockConnection(ctrl)
+	domain := cli.NewMockVirDomain(ctrl)
+	manager := &LibvirtDomainManager{virConn: connection}
+	statePath := filepath.Join(t.TempDir(), "state.save")
+	metadata := &hibernation.Metadata{AttemptID: "attempt-1"}
+	if err := writeHibernationMetadata(statePath, metadata); err != nil {
+		t.Fatal(err)
+	}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "default",
+		Name:      "tracer",
+		Annotations: map[string]string{
+			hibernation.AttemptAnnotation:             "attempt-1",
+			hibernation.LabFailAfterConsumeAnnotation: "attempt-1",
+		},
+	}}
+	first := connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+	domain.EXPECT().GetState().After(first).Return(libvirt.DOMAIN_PAUSED, 0, nil)
+	domain.EXPECT().Free().Return(nil)
+
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || !strings.Contains(err.Error(), hibernation.StateRestoreCommitLost) {
+		t.Fatalf("expected terminal injected failure after consumption, got %v", err)
+	}
+	committed, err := readHibernationMetadata(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !committed.Consumed {
+		t.Fatal("failure after marker did not durably consume the artifact")
+	}
+
+	delete(vmi.Annotations, hibernation.LabFailAfterConsumeAnnotation)
+	second := connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+	domain.EXPECT().GetState().After(second).Return(libvirt.DOMAIN_PAUSED, 0, nil)
+	domain.EXPECT().Free().Return(nil)
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || !strings.Contains(err.Error(), hibernation.StateRestoreCommitLost) {
+		t.Fatalf("consumed paused artifact was replayable: %v", err)
+	}
+}

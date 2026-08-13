@@ -35,6 +35,8 @@ const (
 	PVCIdentitiesAnnotation          = "hibernation.kubevirt.io/pvc-identities"
 	ErrorAnnotation                  = "hibernation.kubevirt.io/error"
 	LabAllowKernelMismatchAnnotation = "hibernation.kubevirt.io/lab-compatibility-override"
+	LabFailBeforeConsumeAnnotation   = "hibernation.kubevirt.io/lab-fail-before-consume"
+	LabFailAfterConsumeAnnotation    = "hibernation.kubevirt.io/lab-fail-after-consume"
 
 	StateMountPath  = "/var/run/kubevirt-private/hibernation"
 	StateVolumeName = "hibernation-state"
