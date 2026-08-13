@@ -96,6 +96,7 @@ type LauncherClient interface {
 	SyncVirtualMachine(vmi *v1.VirtualMachineInstance, options *cmdv1.VirtualMachineOptions) error
 	PauseVirtualMachine(vmi *v1.VirtualMachineInstance) error
 	UnpauseVirtualMachine(vmi *v1.VirtualMachineInstance) error
+	HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool) (*cmdv1.HibernationResponse, error)
 	FreezeVirtualMachine(vmi *v1.VirtualMachineInstance, unfreezeTimeoutSeconds int32) error
 	UnfreezeVirtualMachine(vmi *v1.VirtualMachineInstance) error
 	SyncMigrationTarget(vmi *v1.VirtualMachineInstance, options *cmdv1.VirtualMachineOptions) error
@@ -339,6 +340,30 @@ func (c *VirtLauncherClient) PauseVirtualMachine(vmi *v1.VirtualMachineInstance)
 
 func (c *VirtLauncherClient) UnpauseVirtualMachine(vmi *v1.VirtualMachineInstance) error {
 	return c.genericSendVMICmd("Unpause", c.v1client.UnpauseVirtualMachine, vmi, &cmdv1.VirtualMachineOptions{})
+}
+
+func (c *VirtLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool) (*cmdv1.HibernationResponse, error) {
+	vmiJSON, err := json.Marshal(vmi)
+	if err != nil {
+		return nil, err
+	}
+	request := &cmdv1.HibernationRequest{
+		Vmi:                 &cmdv1.VMI{VmiJson: vmiJSON},
+		Action:              action,
+		StatePath:           statePath,
+		AllowKernelMismatch: allowKernelMismatch,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), extendedTimeout)
+	defer cancel()
+	response, err := c.v1client.HibernateVirtualMachine(ctx, request)
+	var genericResponse *cmdv1.Response
+	if response != nil {
+		genericResponse = response.Response
+	}
+	if err := handleError(err, "Hibernate", genericResponse); err != nil {
+		return response, err
+	}
+	return response, nil
 }
 
 func (c *VirtLauncherClient) FreezeVirtualMachine(vmi *v1.VirtualMachineInstance, unfreezeTimeoutSeconds int32) error {

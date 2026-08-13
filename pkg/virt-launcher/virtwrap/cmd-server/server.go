@@ -304,6 +304,23 @@ func (l *Launcher) UnpauseVirtualMachine(_ context.Context, request *cmdv1.VMIRe
 	return response, nil
 }
 
+func (l *Launcher) HibernateVirtualMachine(_ context.Context, request *cmdv1.HibernationRequest) (*cmdv1.HibernationResponse, error) {
+	response := &cmdv1.HibernationResponse{Response: &cmdv1.Response{Success: true}}
+	vmi, vmiResponse := getVMIFromRequest(request.Vmi)
+	if !vmiResponse.Success {
+		response.Response = vmiResponse
+		return response, nil
+	}
+	result, err := l.domainManager.HibernateVMI(vmi, request.Action, request.StatePath, request.AllowKernelMismatch)
+	if err != nil {
+		log.Log.Object(vmi).Reason(err).Error("hibernation action failed")
+		response.Response.Success = false
+		response.Response.Message = getErrorMessage(err)
+		return response, nil
+	}
+	return result, nil
+}
+
 func (l *Launcher) VirtualMachineMemoryDump(_ context.Context, request *cmdv1.MemoryDumpRequest) (*cmdv1.Response, error) {
 	vmi, response := getVMIFromRequest(request.Vmi)
 	if !response.Success {

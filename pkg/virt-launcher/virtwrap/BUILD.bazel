@@ -5,6 +5,7 @@ go_library(
     name = "go_default_library",
     srcs = [
         "generated_mock_manager.go",
+        "hibernation.go",
         "iommufd.go",
         "live-migration-source.go",
         "live-migration-target.go",
@@ -26,6 +27,7 @@ go_library(
         "//pkg/ephemeral-disk:go_default_library",
         "//pkg/ephemeral-disk-utils:go_default_library",
         "//pkg/handler-launcher-com/cmd/v1:go_default_library",
+        "//pkg/hibernation:go_default_library",
         "//pkg/hooks:go_default_library",
         "//pkg/host-disk:go_default_library",
         "//pkg/hotplug-disk:go_default_library",
@@ -81,6 +83,7 @@ go_library(
         "//staging/src/kubevirt.io/api/core/v1:go_default_library",
         "//staging/src/kubevirt.io/api/plugin/v1alpha1:go_default_library",
         "//staging/src/kubevirt.io/client-go/log:go_default_library",
+        "//staging/src/kubevirt.io/client-go/version:go_default_library",
         "//tools/cache:go_default_library",
         "//vendor/go.uber.org/mock/gomock:go_default_library",
         "//vendor/golang.org/x/sys/unix:go_default_library",
@@ -97,6 +100,7 @@ go_library(
 go_test(
     name = "go_default_test",
     srcs = [
+        "hibernation_test.go",
         "live-migration-source_test.go",
         "live-migration-target_test.go",
         "manager_test.go",
@@ -112,6 +116,7 @@ go_test(
         "//pkg/ephemeral-disk-utils:go_default_library",
         "//pkg/ephemeral-disk/fake:go_default_library",
         "//pkg/handler-launcher-com/cmd/v1:go_default_library",
+        "//pkg/hibernation:go_default_library",
         "//pkg/host-disk:go_default_library",
         "//pkg/libvmi:go_default_library",
         "//pkg/libvmi/status:go_default_library",

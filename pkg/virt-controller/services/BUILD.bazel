@@ -19,6 +19,7 @@ go_library(
         "//pkg/config:go_default_library",
         "//pkg/container-disk:go_default_library",
         "//pkg/dra:go_default_library",
+        "//pkg/hibernation:go_default_library",
         "//pkg/hooks:go_default_library",
         "//pkg/host-disk:go_default_library",
         "//pkg/hypervisor:go_default_library",
@@ -64,6 +65,7 @@ go_test(
     name = "go_default_test",
     srcs = [
         "container_disk_test.go",
+        "hibernation_test.go",
         "nodeselectorrenderer_test.go",
         "rendercontainer_test.go",
         "renderresources_test.go",
@@ -77,6 +79,7 @@ go_test(
     deps = [
         "//pkg/config:go_default_library",
         "//pkg/container-disk:go_default_library",
+        "//pkg/hibernation:go_default_library",
         "//pkg/hooks:go_default_library",
         "//pkg/hypervisor:go_default_library",
         "//pkg/libvmi:go_default_library",

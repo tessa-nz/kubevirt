@@ -401,6 +401,26 @@ func (mr *MockCmdClientMockRecorder) GuestPing(ctx, in any, opts ...any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GuestPing", reflect.TypeOf((*MockCmdClient)(nil).GuestPing), varargs...)
 }
 
+// HibernateVirtualMachine mocks base method.
+func (m *MockCmdClient) HibernateVirtualMachine(ctx context.Context, in *HibernationRequest, opts ...grpc.CallOption) (*HibernationResponse, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, in}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "HibernateVirtualMachine", varargs...)
+	ret0, _ := ret[0].(*HibernationResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// HibernateVirtualMachine indicates an expected call of HibernateVirtualMachine.
+func (mr *MockCmdClientMockRecorder) HibernateVirtualMachine(ctx, in any, opts ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, in}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HibernateVirtualMachine", reflect.TypeOf((*MockCmdClient)(nil).HibernateVirtualMachine), varargs...)
+}
+
 // HotplugHostDevices mocks base method.
 func (m *MockCmdClient) HotplugHostDevices(ctx context.Context, in *VMIRequest, opts ...grpc.CallOption) (*Response, error) {
 	m.ctrl.T.Helper()
@@ -1053,6 +1073,21 @@ func (m *MockCmdServer) GuestPing(arg0 context.Context, arg1 *GuestPingRequest) 
 func (mr *MockCmdServerMockRecorder) GuestPing(arg0, arg1 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GuestPing", reflect.TypeOf((*MockCmdServer)(nil).GuestPing), arg0, arg1)
+}
+
+// HibernateVirtualMachine mocks base method.
+func (m *MockCmdServer) HibernateVirtualMachine(arg0 context.Context, arg1 *HibernationRequest) (*HibernationResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HibernateVirtualMachine", arg0, arg1)
+	ret0, _ := ret[0].(*HibernationResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// HibernateVirtualMachine indicates an expected call of HibernateVirtualMachine.
+func (mr *MockCmdServerMockRecorder) HibernateVirtualMachine(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HibernateVirtualMachine", reflect.TypeOf((*MockCmdServer)(nil).HibernateVirtualMachine), arg0, arg1)
 }
 
 // HotplugHostDevices mocks base method.

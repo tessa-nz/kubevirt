@@ -17,6 +17,7 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/config"
 	containerdisk "kubevirt.io/kubevirt/pkg/container-disk"
+	"kubevirt.io/kubevirt/pkg/hibernation"
 	"kubevirt.io/kubevirt/pkg/hooks"
 	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
 	"kubevirt.io/kubevirt/pkg/network/downwardapi"
@@ -31,6 +32,37 @@ type VolumeRendererOption func(renderer *VolumeRenderer) error
 
 type imagePullPolicyGetter interface {
 	GetImagePullPolicy() k8sv1.PullPolicy
+}
+
+func withHibernationState(vmi *v1.VirtualMachineInstance, pvcStore cache.Store) VolumeRendererOption {
+	return func(renderer *VolumeRenderer) error {
+		claimName := vmi.Annotations[hibernation.StatePVCAnnotation]
+		if claimName == "" {
+			return nil
+		}
+		obj, exists, err := pvcStore.GetByKey(vmi.Namespace + "/" + claimName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("hibernation state PVC %s/%s does not exist", vmi.Namespace, claimName)
+		}
+		pvc, ok := obj.(*k8sv1.PersistentVolumeClaim)
+		if !ok {
+			return fmt.Errorf("hibernation state PVC cache entry has unexpected type %T", obj)
+		}
+		if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == k8sv1.PersistentVolumeBlock {
+			return fmt.Errorf("hibernation state PVC must use filesystem volume mode")
+		}
+		renderer.podVolumes = append(renderer.podVolumes, k8sv1.Volume{
+			Name:         hibernation.StateVolumeName,
+			VolumeSource: k8sv1.VolumeSource{PersistentVolumeClaim: &k8sv1.PersistentVolumeClaimVolumeSource{ClaimName: claimName}},
+		})
+		renderer.podVolumeMounts = append(renderer.podVolumeMounts, k8sv1.VolumeMount{
+			Name: hibernation.StateVolumeName, MountPath: hibernation.StateMountPath,
+		})
+		return nil
+	}
 }
 
 type VolumeRenderer struct {

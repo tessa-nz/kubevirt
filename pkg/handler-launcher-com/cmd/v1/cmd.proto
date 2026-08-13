@@ -40,6 +40,28 @@ service Cmd {
   rpc BackupVirtualMachine(BackupRequest) returns (Response) {}
   rpc RedefineCheckpoint(RedefineCheckpointRequest) returns (RedefineCheckpointResponse) {}
   rpc GetVMStats(VMStatsRequest) returns (VMStatsResponse) {}
+  rpc HibernateVirtualMachine(HibernationRequest) returns (HibernationResponse) {}
+}
+
+enum HibernationAction {
+  HIBERNATION_ACTION_UNSPECIFIED = 0;
+  HIBERNATION_ACTION_SAVE = 1;
+  HIBERNATION_ACTION_RESTORE_PAUSED = 2;
+  HIBERNATION_ACTION_COMMIT_UNPAUSE = 3;
+  HIBERNATION_ACTION_ERASE = 4;
+}
+
+message HibernationRequest {
+  VMI vmi = 1;
+  HibernationAction action = 2;
+  string statePath = 3;
+  bool allowKernelMismatch = 4;
+}
+
+message HibernationResponse {
+  Response response = 1;
+  string phase = 2;
+  bytes metadataJson = 3;
 }
 
 message QemuVersionResponse {

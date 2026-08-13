@@ -67,6 +67,7 @@ import (
 
 	"kubevirt.io/kubevirt/pkg/apimachinery/patch"
 	"kubevirt.io/kubevirt/pkg/controller"
+	"kubevirt.io/kubevirt/pkg/hibernation"
 	"kubevirt.io/kubevirt/pkg/storage/cbt"
 	storagehotplug "kubevirt.io/kubevirt/pkg/storage/hotplug"
 	"kubevirt.io/kubevirt/pkg/storage/memorydump"
@@ -977,6 +978,10 @@ func (c *Controller) syncRunStrategy(vm *virtv1.VirtualMachine, vmi *virtv1.Virt
 
 	switch runStrategy {
 	case virtv1.RunStrategyAlways:
+		if state := vm.Annotations[hibernation.StateAnnotation]; state == hibernation.StateHibernated || hibernation.IsTerminal(state) {
+			log.Log.Object(vm).Infof("suppressing runStrategy Always while hibernation state is %s", state)
+			return vm, nil
+		}
 		// For this RunStrategy, a VMI should always be running. If a StateChangeRequest
 		// asks to stop a VMI, a new one must be immediately re-started.
 		if vmi != nil {
@@ -1871,6 +1876,9 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 	vmi.ObjectMeta.Name = vm.ObjectMeta.Name
 	vmi.ObjectMeta.GenerateName = ""
 	vmi.ObjectMeta.Namespace = vm.ObjectMeta.Namespace
+	if vmi.ObjectMeta.Annotations == nil {
+		vmi.ObjectMeta.Annotations = map[string]string{}
+	}
 	vmi.Spec = *vm.Spec.Template.Spec.DeepCopy()
 
 	if hasStartPausedRequest(vm) {
@@ -1892,6 +1900,22 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 	}
 
 	util.SetDefaultVolumeDisk(&vmi.Spec)
+	for _, key := range []string{
+		hibernation.StatePVCAnnotation,
+		hibernation.StateAnnotation,
+		hibernation.AttemptAnnotation,
+		hibernation.VMUIDAnnotation,
+		hibernation.PVCIdentitiesAnnotation,
+		hibernation.LabAllowKernelMismatchAnnotation,
+	} {
+		if value := vm.Annotations[key]; value != "" {
+			vmi.Annotations[key] = value
+		}
+	}
+	if vm.Annotations[hibernation.StateAnnotation] == hibernation.StateRestoring && vm.Annotations[hibernation.RequestAnnotation] == hibernation.RequestResume {
+		vmi.Annotations[hibernation.RequestAnnotation] = hibernation.RequestRestorePaused
+		vmi.Annotations[hibernation.StateAnnotation] = hibernation.StateRestoring
+	}
 
 	return vmi
 }
@@ -3252,6 +3276,14 @@ func (c *Controller) sync(vm *virtv1.VirtualMachine, vmi *virtv1.VirtualMachineI
 		if err != nil {
 			return vm, vmi, nil, err
 		}
+	}
+
+	vm, vmi, hibernationHandled, err := c.reconcileHibernation(vm, vmi)
+	if err != nil {
+		return vm, vmi, common.NewSyncError(err, "HibernationFailed"), nil
+	}
+	if hibernationHandled {
+		return vm, vmi, nil, nil
 	}
 
 	vmi, err = c.conditionallyBumpGenerationAnnotationOnVmi(vm, vmi)

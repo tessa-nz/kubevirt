@@ -55,6 +55,8 @@ import (
 	"kubevirt.io/kubevirt/pkg/config"
 	"kubevirt.io/kubevirt/pkg/controller"
 	"kubevirt.io/kubevirt/pkg/executor"
+	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
+	"kubevirt.io/kubevirt/pkg/hibernation"
 	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
 	hotplugdisk "kubevirt.io/kubevirt/pkg/hotplug-disk"
 	"kubevirt.io/kubevirt/pkg/hypervisor"
@@ -366,6 +368,12 @@ func (c *VirtualMachineController) execute(key string) error {
 			c.logger.Object(vmi).V(3).Infof("ghost record cache provided %s as UID", uid)
 			vmi.UID = uid
 		}
+	}
+
+	if vmiExists && domainExists && domain.Spec.Metadata.KubeVirt.UID == "" &&
+		hibernation.CanAdoptEmptyDomainUID(vmi.Annotations[hibernation.StateAnnotation]) {
+		domain.Spec.Metadata.KubeVirt.UID = vmi.UID
+		domain.ObjectMeta.UID = vmi.UID
 	}
 
 	if vmiExists && domainExists && domain.Spec.Metadata.KubeVirt.UID != vmi.UID {
@@ -1090,8 +1098,27 @@ func (c *VirtualMachineController) updateVMIConditions(vmi *v1.VirtualMachineIns
 	}
 	c.updatePausedConditions(vmi, domain, condManager)
 	c.updateSoftwareEmulationCondition(vmi, domain, condManager)
+	c.updateHibernationCondition(vmi, condManager)
 
 	return nil
+}
+
+func (c *VirtualMachineController) updateHibernationCondition(vmi *v1.VirtualMachineInstance, condManager *controller.VirtualMachineInstanceConditionManager) {
+	state := vmi.Annotations[hibernation.StateAnnotation]
+	if state == "" {
+		condManager.RemoveCondition(vmi, v1.VirtualMachineInstanceConditionType(hibernation.VMIConditionType))
+		return
+	}
+	status := k8sv1.ConditionTrue
+	if hibernation.IsTerminal(state) {
+		status = k8sv1.ConditionFalse
+	}
+	condManager.UpdateCondition(vmi, &v1.VirtualMachineInstanceCondition{
+		Type:    v1.VirtualMachineInstanceConditionType(hibernation.VMIConditionType),
+		Status:  status,
+		Reason:  state,
+		Message: vmi.Annotations[hibernation.ErrorAnnotation],
+	})
 }
 
 func (c *VirtualMachineController) updateVMIStatus(oldStatus *v1.VirtualMachineInstanceStatus, vmi *v1.VirtualMachineInstance, domain *api.Domain, syncError error) (err error) {
@@ -2121,6 +2148,9 @@ func (c *VirtualMachineController) shouldWaitForSEVAttestation(vmi *v1.VirtualMa
 }
 
 func (c *VirtualMachineController) syncVirtualMachine(client cmdclient.LauncherClient, vmi *v1.VirtualMachineInstance, preallocatedVolumes []string) error {
+	if request := vmi.Annotations[hibernation.RequestAnnotation]; request != "" {
+		return c.syncHibernation(client, vmi, request)
+	}
 	smbios := c.clusterConfig.GetSMBIOS()
 	period := c.clusterConfig.GetMemBalloonStatsPeriod()
 
@@ -2140,6 +2170,55 @@ func (c *VirtualMachineController) syncVirtualMachine(client cmdclient.LauncherC
 	}
 
 	return err
+}
+
+func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClient, vmi *v1.VirtualMachineInstance, request string) error {
+	action := cmdv1.HibernationAction_HIBERNATION_ACTION_UNSPECIFIED
+	successState := ""
+	failureState := hibernation.StateResumeRejected
+	switch request {
+	case hibernation.RequestSave:
+		action = cmdv1.HibernationAction_HIBERNATION_ACTION_SAVE
+		successState = hibernation.StateHibernated
+		failureState = hibernation.StateSaveIncomplete
+	case hibernation.RequestRestorePaused:
+		action = cmdv1.HibernationAction_HIBERNATION_ACTION_RESTORE_PAUSED
+		successState = hibernation.StateRestoredPaused
+	case hibernation.RequestCommitUnpause:
+		action = cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE
+		successState = hibernation.StateRunningAwaitingVerification
+		failureState = hibernation.StateRestoreCommitLost
+	case hibernation.RequestErase:
+		action = cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE
+		successState = hibernation.StateRunning
+	default:
+		return fmt.Errorf("unknown hibernation request %q", request)
+	}
+	allowKernelMismatch := vmi.Annotations[hibernation.LabAllowKernelMismatchAnnotation] != "" &&
+		vmi.Annotations[hibernation.LabAllowKernelMismatchAnnotation] == vmi.Annotations[hibernation.AttemptAnnotation]
+	response, err := client.HibernateVirtualMachine(vmi, action, filepath.Join(hibernation.StateMountPath, "state.save"), allowKernelMismatch)
+	if err != nil {
+		vmi.Annotations[hibernation.StateAnnotation] = failureState
+		vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
+		return err
+	}
+	if action == cmdv1.HibernationAction_HIBERNATION_ACTION_RESTORE_PAUSED &&
+		response != nil && response.Phase == hibernation.StateRestoredPaused {
+		response, err = client.HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE, filepath.Join(hibernation.StateMountPath, "state.save"), false)
+		if err != nil {
+			vmi.Annotations[hibernation.StateAnnotation] = hibernation.StateRestoreCommitLost
+			vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
+			return err
+		}
+		successState = hibernation.StateRunningAwaitingVerification
+	}
+	vmi.Annotations[hibernation.StateAnnotation] = successState
+	delete(vmi.Annotations, hibernation.RequestAnnotation)
+	delete(vmi.Annotations, hibernation.ErrorAnnotation)
+	if response != nil && response.Phase != "" {
+		vmi.Annotations[hibernation.StateAnnotation] = response.Phase
+	}
+	return nil
 }
 
 func (c *VirtualMachineController) getPreallocatedVolumes(vmi *v1.VirtualMachineInstance) []string {

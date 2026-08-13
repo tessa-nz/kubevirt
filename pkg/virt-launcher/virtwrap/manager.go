@@ -166,6 +166,7 @@ type contextStore struct {
 
 type DomainManager interface {
 	SyncVMI(*v1.VirtualMachineInstance, bool, *cmdv1.VirtualMachineOptions) (*api.DomainSpec, error)
+	HibernateVMI(*v1.VirtualMachineInstance, cmdv1.HibernationAction, string, bool) (*cmdv1.HibernationResponse, error)
 	PauseVMI(*v1.VirtualMachineInstance) error
 	UnpauseVMI(*v1.VirtualMachineInstance) error
 	FreezeVMI(*v1.VirtualMachineInstance, int32) error

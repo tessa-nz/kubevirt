@@ -70,6 +70,10 @@ type Connection interface {
 	GetDomainStats(statsTypes libvirt.DomainStatsTypes, l *stats.DomainJobInfo, flags libvirt.ConnectGetAllDomainStatsFlags) ([]*stats.DomainStats, error)
 	GetDomainDirtyRate(calculationDuration time.Duration, flags libvirt.DomainDirtyRateCalcFlags) ([]*stats.DomainStatsDirtyRate, error)
 	GetQemuVersion() (string, error)
+	GetLibVersion() (uint32, error)
+	DomainRestoreFlags(srcFile, xmlConf string, flags libvirt.DomainSaveRestoreFlags) error
+	DomainSaveImageDefineXML(file, xml string, flags libvirt.DomainSaveRestoreFlags) error
+	DomainSaveImageGetXMLDesc(file string, flags libvirt.DomainSaveImageXMLFlags) (string, error)
 	GetSEVInfo() (*api.SEVNodeParameters, error)
 }
 
@@ -630,6 +634,7 @@ type VirDomain interface {
 	CreateWithFlags(flags libvirt.DomainCreateFlags) error
 	Suspend() error
 	Resume() error
+	SaveFlags(destFile string, destXML string, flags libvirt.DomainSaveRestoreFlags) error
 	BlockResize(disk string, size uint64, flags libvirt.DomainBlockResizeFlags) error
 	GetBlockInfo(disk string, flags uint32) (*libvirt.DomainBlockInfo, error)
 	AttachDeviceFlags(xml string, flags libvirt.DomainDeviceModifyFlags) error
@@ -669,6 +674,46 @@ type VirDomain interface {
 	BackupBegin(backupXML string, checkpointXML string, flags libvirt.DomainBackupBeginFlags) error
 	CreateCheckpointXML(xmlConfig string, flags libvirt.DomainCheckpointCreateFlags) (*libvirt.DomainCheckpoint, error)
 	QemuMonitorCommand(command string, flags libvirt.DomainQemuMonitorCommandFlags) (string, error)
+}
+
+func (l *LibvirtConnection) GetLibVersion() (uint32, error) {
+	if err := l.reconnectIfNecessary(); err != nil {
+		return 0, err
+	}
+	version, err := l.Connect.GetLibVersion()
+	if err != nil {
+		l.checkConnectionLost(err)
+	}
+	return version, err
+}
+
+func (l *LibvirtConnection) DomainRestoreFlags(srcFile, xmlConf string, flags libvirt.DomainSaveRestoreFlags) error {
+	if err := l.reconnectIfNecessary(); err != nil {
+		return err
+	}
+	err := l.Connect.DomainRestoreFlags(srcFile, xmlConf, flags)
+	if err != nil {
+		l.checkConnectionLost(err)
+	}
+	return err
+}
+
+func (l *LibvirtConnection) DomainSaveImageGetXMLDesc(file string, flags libvirt.DomainSaveImageXMLFlags) (string, error) {
+	if err := l.reconnectIfNecessary(); err != nil {
+		return "", err
+	}
+	xml, err := l.Connect.DomainSaveImageGetXMLDesc(file, flags)
+	l.checkConnectionLost(err)
+	return xml, err
+}
+
+func (l *LibvirtConnection) DomainSaveImageDefineXML(file, xml string, flags libvirt.DomainSaveRestoreFlags) error {
+	if err := l.reconnectIfNecessary(); err != nil {
+		return err
+	}
+	err := l.Connect.DomainSaveImageDefineXML(file, xml, flags)
+	l.checkConnectionLost(err)
+	return err
 }
 
 func NewConnection(uri string, user string, pass string, checkInterval time.Duration) (Connection, error) {

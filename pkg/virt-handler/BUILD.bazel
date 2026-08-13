@@ -24,6 +24,7 @@ go_library(
         "//pkg/ephemeral-disk-utils:go_default_library",
         "//pkg/executor:go_default_library",
         "//pkg/handler-launcher-com/cmd/v1:go_default_library",
+        "//pkg/hibernation:go_default_library",
         "//pkg/host-disk:go_default_library",
         "//pkg/hotplug-disk:go_default_library",
         "//pkg/hypervisor:go_default_library",
@@ -88,6 +89,7 @@ go_test(
     timeout = "long",
     srcs = [
         "cbt_test.go",
+        "hibernation_test.go",
         "migration-source_test.go",
         "migration-target_test.go",
         "migration_test.go",
@@ -105,6 +107,7 @@ go_test(
         "//pkg/controller/testing:go_default_library",
         "//pkg/ephemeral-disk-utils:go_default_library",
         "//pkg/handler-launcher-com/cmd/v1:go_default_library",
+        "//pkg/hibernation:go_default_library",
         "//pkg/hypervisor:go_default_library",
         "//pkg/libvmi:go_default_library",
         "//pkg/libvmi/status:go_default_library",
