@@ -9,6 +9,11 @@ go_library(
 
 go_test(
     name = "go_default_test",
-    srcs = ["types_test.go"],
+    srcs = [
+        "hibernation_suite_test.go",
+        "types_test.go",
+    ],
     embed = [":go_default_library"],
+    race = "on",
+    deps = ["//staging/src/kubevirt.io/client-go/testutils:go_default_library"],
 )
