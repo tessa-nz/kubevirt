@@ -415,7 +415,7 @@ func (c *VirtualMachineController) execute(key string) error {
 		}
 	}
 
-	if vmi.DeletionTimestamp == nil && isMigrationInProgress(vmi, domain) {
+	if vmi.DeletionTimestamp == nil && shouldIgnoreInProgressMigration(vmi, domain) {
 		c.logger.V(4).Infof("ignoring key %v as migration is in progress", key)
 		return nil
 	}
@@ -1629,6 +1629,10 @@ func (c *VirtualMachineController) sync(key string,
 
 func shouldProcessVMIUpdate(vmi *v1.VirtualMachineInstance, calculatedPhase v1.VirtualMachineInstancePhase) bool {
 	return vmi.Status.Phase == calculatedPhase || vmi.Annotations[hibernation.RequestAnnotation] != ""
+}
+
+func shouldIgnoreInProgressMigration(vmi *v1.VirtualMachineInstance, domain *api.Domain) bool {
+	return isMigrationInProgress(vmi, domain) && vmi.Annotations[hibernation.RequestAnnotation] == ""
 }
 
 func (c *VirtualMachineController) processVmCleanup(vmi *v1.VirtualMachineInstance) error {

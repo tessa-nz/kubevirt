@@ -30,6 +30,7 @@ import (
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	"kubevirt.io/kubevirt/pkg/hibernation"
 	cmdclient "kubevirt.io/kubevirt/pkg/virt-handler/cmd-client"
+	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 )
 
 func TestSyncHibernationSaveIsDispatchedAndPublished(t *testing.T) {
@@ -110,5 +111,24 @@ func TestHibernationRequestBypassesPhaseOptimization(t *testing.T) {
 	delete(vmi.Annotations, hibernation.RequestAnnotation)
 	if shouldProcessVMIUpdate(vmi, v1.Running) {
 		t.Fatal("ordinary updates must retain the phase optimization")
+	}
+}
+
+func TestHibernationRequestBypassesRestoredDomainMigrationGuard(t *testing.T) {
+	vmi := &v1.VirtualMachineInstance{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			hibernation.RequestAnnotation: hibernation.RequestCommitUnpause,
+		}},
+	}
+	domain := &api.Domain{Status: api.DomainStatus{
+		Status: api.Paused,
+		Reason: api.ReasonPausedMigration,
+	}}
+	if shouldIgnoreInProgressMigration(vmi, domain) {
+		t.Fatal("commit-unpause must not be mistaken for a live migration")
+	}
+	delete(vmi.Annotations, hibernation.RequestAnnotation)
+	if !shouldIgnoreInProgressMigration(vmi, domain) {
+		t.Fatal("ordinary paused migration must retain the migration guard")
 	}
 }
