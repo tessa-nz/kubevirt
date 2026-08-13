@@ -22,6 +22,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -154,5 +155,25 @@ func TestSetDomainKubeVirtUID(t *testing.T) {
 	}
 	if updated != "<domain><metadata><kubevirt><uid>destination-vmi</uid></kubevirt></metadata></domain>" {
 		t.Fatalf("unexpected domain metadata: %s", updated)
+	}
+}
+
+func TestEjectTransientCloudInitMedia(t *testing.T) {
+	xml := `<domain><devices>` +
+		`<disk type="file" device="disk"><source file="/persistent/root.img"/><target dev="vda"/></disk>` +
+		`<disk type="file" device="cdrom"><source file="/var/run/kubevirt-ephemeral-disks/cloud-init-data/default/tracer/noCloud.iso"/><target dev="sda"/></disk>` +
+		`</devices></domain>`
+	updated, err := ejectTransientCloudInitMedia(xml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(updated, "cloud-init-data") {
+		t.Fatalf("transient cloud-init media remains in saved XML: %s", updated)
+	}
+	if !strings.Contains(updated, "/persistent/root.img") {
+		t.Fatalf("persistent guest disk was removed: %s", updated)
+	}
+	if !strings.Contains(updated, `device="cdrom"`) {
+		t.Fatalf("cloud-init CD-ROM device was removed instead of ejected: %s", updated)
 	}
 }

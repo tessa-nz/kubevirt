@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"libvirt.org/go/libvirt"
+	"libvirt.org/go/libvirtxml"
 
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/version"
@@ -133,6 +134,10 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 		return nil, "", err
 	}
 	savedXML, err := l.virConn.DomainSaveImageGetXMLDesc(partial, 0)
+	if err != nil {
+		return nil, "", err
+	}
+	savedXML, err = ejectTransientCloudInitMedia(savedXML)
 	if err != nil {
 		return nil, "", err
 	}
@@ -253,6 +258,35 @@ func (l *LibvirtDomainManager) restoreVMI(vmi *v1.VirtualMachineInstance, stateP
 		}
 	}
 	return metadata, hibernation.StateRestoredPaused, nil
+}
+
+func ejectTransientCloudInitMedia(domainXML string) (string, error) {
+	domain := &libvirtxml.Domain{}
+	if err := domain.Unmarshal(domainXML); err != nil {
+		return "", fmt.Errorf("parse saved domain XML: %w", err)
+	}
+	if domain.Devices == nil {
+		return domainXML, nil
+	}
+	changed := false
+	for index := range domain.Devices.Disks {
+		disk := &domain.Devices.Disks[index]
+		if disk.Device != "cdrom" || disk.Source == nil || disk.Source.File == nil {
+			continue
+		}
+		if strings.Contains(disk.Source.File.File, "/cloud-init-data/") {
+			disk.Source = nil
+			changed = true
+		}
+	}
+	if !changed {
+		return domainXML, nil
+	}
+	updated, err := domain.Marshal()
+	if err != nil {
+		return "", fmt.Errorf("marshal saved domain XML: %w", err)
+	}
+	return updated, nil
 }
 
 func setDomainKubeVirtUID(domainXML, uid string) (string, error) {
