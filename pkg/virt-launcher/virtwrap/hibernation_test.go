@@ -85,6 +85,7 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 	}
 	statePath := filepath.Join(t.TempDir(), "state.save")
 	domainXML := "<domain><name>default_tracer</name><metadata><kubevirt><uid>source-vmi</uid></kubevirt></metadata><channel path=\"source-vmi/socket\"/></domain>"
+	committedDomainXML := "<domain>\n  <name>default_tracer</name><metadata><kubevirt><uid>source-vmi</uid></kubevirt></metadata><channel path=\"source-vmi/socket\"/>\n</domain>"
 
 	connection.EXPECT().GetQemuVersion().Return("qemu", nil).Times(2)
 	connection.EXPECT().GetLibVersion().Return(uint32(1000), nil).Times(2)
@@ -96,11 +97,15 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 		})
 	connection.EXPECT().DomainSaveImageGetXMLDesc(statePath+".partial", libvirt.DomainSaveImageXMLFlags(0)).Return(domainXML, nil)
 	connection.EXPECT().DomainSaveImageDefineXML(statePath+".partial", domainXML, libvirt.DomainSaveRestoreFlags(0)).Return(nil)
+	connection.EXPECT().DomainSaveImageGetXMLDesc(statePath+".partial", libvirt.DomainSaveImageXMLFlags(0)).Return(committedDomainXML, nil)
 	domain.EXPECT().Free().Return(nil)
 
 	metadata, phase, err := manager.saveVMI(vmi, statePath)
 	if err != nil || phase != hibernation.StateHibernated || !metadata.Completed || metadata.Consumed {
 		t.Fatalf("unexpected save result phase=%q metadata=%+v err=%v", phase, metadata, err)
+	}
+	if metadata.DomainXMLHash != hibernation.HashBytes([]byte(committedDomainXML)) {
+		t.Fatal("save metadata did not hash libvirt's committed domain XML")
 	}
 	if _, phase, err = manager.saveVMI(vmi, statePath); err != nil || phase != hibernation.StateHibernated {
 		t.Fatalf("idempotent save failed: phase=%q err=%v", phase, err)
@@ -111,7 +116,7 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 	if err := writeHibernationMetadata(statePath, metadata); err != nil {
 		t.Fatal(err)
 	}
-	connection.EXPECT().DomainSaveImageGetXMLDesc(statePath, libvirt.DomainSaveImageXMLFlags(0)).Return(domainXML, nil)
+	connection.EXPECT().DomainSaveImageGetXMLDesc(statePath, libvirt.DomainSaveImageXMLFlags(0)).Return(committedDomainXML, nil)
 	if _, _, err := manager.restoreVMI(vmi, statePath, false); err == nil {
 		t.Fatal("restore accepted a substituted saved-domain definition")
 	}
@@ -120,9 +125,9 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 	}
 
 	vmi.UID = "destination-vmi"
-	connection.EXPECT().DomainSaveImageGetXMLDesc(statePath, libvirt.DomainSaveImageXMLFlags(0)).Return(domainXML, nil)
+	connection.EXPECT().DomainSaveImageGetXMLDesc(statePath, libvirt.DomainSaveImageXMLFlags(0)).Return(committedDomainXML, nil)
 	connection.EXPECT().LookupDomainByName("default_tracer").Return(nil, libvirt.Error{Code: libvirt.ERR_NO_DOMAIN})
-	restoreXML := "<domain><name>default_tracer</name><metadata><kubevirt><uid>destination-vmi</uid></kubevirt></metadata><channel path=\"destination-vmi/socket\"/></domain>"
+	restoreXML := strings.ReplaceAll(committedDomainXML, "source-vmi", "destination-vmi")
 	connection.EXPECT().DomainRestoreFlags(statePath, restoreXML, libvirt.DOMAIN_SAVE_PAUSED).Return(nil)
 	metadata, phase, err = manager.restoreVMI(vmi, statePath, false)
 	if err != nil || phase != hibernation.StateRestoredPaused || metadata.Consumed {

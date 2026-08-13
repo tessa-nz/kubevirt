@@ -148,7 +148,11 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 	if err := l.virConn.DomainSaveImageDefineXML(partial, savedXML, 0); err != nil {
 		return nil, "", err
 	}
-	metadata.DomainXMLHash = hibernation.HashBytes([]byte(savedXML))
+	committedXML, err := l.virConn.DomainSaveImageGetXMLDesc(partial, 0)
+	if err != nil {
+		return nil, "", err
+	}
+	metadata.DomainXMLHash = hibernation.HashBytes([]byte(committedXML))
 	checksum, size, err := checksumFile(partial)
 	if err != nil {
 		return nil, "", err
