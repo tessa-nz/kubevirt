@@ -132,6 +132,23 @@ var _ = Describe("VirtLauncher", func() {
 				Expect(mon.isDone).To(BeTrue())
 			})
 
+			It("waits for transactional hibernation publication while qemu is a zombie", func() {
+				startProcess()
+				verifyProcessStarted()
+				marker := filepath.Join(GinkgoT().TempDir(), "hibernation-save-in-progress")
+				Expect(os.WriteFile(marker, []byte("attempt"), 0600)).To(Succeed())
+				mon.hibernationSaveMarker = marker
+
+				stopProcess()
+				mon.refresh()
+				Expect(mon.isDone).To(BeFalse())
+
+				Expect(os.Remove(marker)).To(Succeed())
+				mon.refresh()
+				Expect(mon.isDone).To(BeTrue())
+				_ = cmd.Wait()
+			})
+
 			It("verify pid detection works", func() {
 				startProcess()
 				verifyProcessStarted()

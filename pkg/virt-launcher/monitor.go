@@ -178,7 +178,7 @@ func (mon *monitor) refresh() {
 		log.Log.Reason(err).Errorf("Error detecting pid (%d) status.", mon.pid)
 		return
 	}
-	if exists == false {
+	if exists == false || isZombie {
 		if mon.hibernationSaveMarker != "" {
 			if _, markerErr := os.Stat(mon.hibernationSaveMarker); markerErr == nil {
 				log.Log.Infof("Process %s exited during hibernation save; waiting for publication", mon.domainName)
@@ -188,10 +188,12 @@ func (mon *monitor) refresh() {
 				return
 			}
 		}
-		log.Log.Infof("Process %s and pid %d is gone!", mon.domainName, mon.pid)
-		mon.pid = 0
-		mon.isDone = true
-		return
+		if exists == false {
+			log.Log.Infof("Process %s and pid %d is gone!", mon.domainName, mon.pid)
+			mon.pid = 0
+			mon.isDone = true
+			return
+		}
 	}
 
 	if isZombie {
