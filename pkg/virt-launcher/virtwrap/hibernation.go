@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"libvirt.org/go/libvirt"
@@ -46,6 +47,12 @@ import (
 )
 
 const hibernationMetadataFile = "metadata.json"
+
+const (
+	kvmGetAPIVersion   = 0xae00
+	kvmCheckExtension  = 0xae03
+	kvmCapabilityLimit = 256
+)
 
 func (l *LibvirtDomainManager) HibernateVMI(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool) (*cmdv1.HibernationResponse, error) {
 	l.domainModifyLock.Lock()
@@ -409,13 +416,9 @@ func (l *LibvirtDomainManager) currentMetadata(vmi *v1.VirtualMachineInstance) (
 	}
 	kernel := readTrimmed("/proc/sys/kernel/osrelease")
 	cpuInfo := readTrimmed("/proc/cpuinfo")
-	kvmParameters, _ := filepath.Glob("/sys/module/kvm*/parameters/*")
-	var kvm strings.Builder
-	for _, path := range kvmParameters {
-		kvm.WriteString(path)
-		kvm.WriteByte('=')
-		kvm.WriteString(readTrimmed(path))
-		kvm.WriteByte('\n')
+	kvmFingerprint, err := currentKVMFingerprint()
+	if err != nil {
+		return nil, err
 	}
 	build := version.Get()
 	cpuModel := ""
@@ -444,12 +447,42 @@ func (l *LibvirtDomainManager) currentMetadata(vmi *v1.VirtualMachineInstance) (
 		CPUModel:          cpuModel,
 		CPUFeatures:       hibernation.HashBytes([]byte(stableCPUFingerprint(cpuInfo))),
 		HostKernelRelease: kernel,
-		KVMFingerprint:    hibernation.HashBytes([]byte(kvm.String())),
+		KVMFingerprint:    kvmFingerprint,
 		Microcode:         microcode,
 		KubeVirtVersion:   build.GitVersion + "+" + build.GitCommit,
 		QEMUVersion:       qemuVersion,
 		LibvirtVersion:    fmt.Sprintf("%d", libvirtVersion),
 	}, nil
+}
+
+func currentKVMFingerprint() (string, error) {
+	kvmDevice, err := os.Open("/dev/kvm")
+	if err != nil {
+		return "", fmt.Errorf("open /dev/kvm for capability fingerprint: %w", err)
+	}
+	defer kvmDevice.Close()
+
+	var fingerprint strings.Builder
+	apiVersion, _, errno := syscall.Syscall(syscall.SYS_IOCTL, kvmDevice.Fd(), kvmGetAPIVersion, 0)
+	if errno != 0 {
+		return "", fmt.Errorf("query KVM API version: %w", errno)
+	}
+	fmt.Fprintf(&fingerprint, "api=%d\n", apiVersion)
+	for capability := uintptr(0); capability < kvmCapabilityLimit; capability++ {
+		value, _, errno := syscall.Syscall(syscall.SYS_IOCTL, kvmDevice.Fd(), kvmCheckExtension, capability)
+		if errno != 0 {
+			return "", fmt.Errorf("query KVM capability %d: %w", capability, errno)
+		}
+		if value != 0 {
+			fmt.Fprintf(&fingerprint, "capability[%d]=%d\n", capability, value)
+		}
+	}
+
+	kvmParameters, _ := filepath.Glob("/sys/module/kvm*/parameters/*")
+	for _, path := range kvmParameters {
+		fmt.Fprintf(&fingerprint, "%s=%s\n", path, readTrimmed(path))
+	}
+	return hibernation.HashBytes([]byte(fingerprint.String())), nil
 }
 
 func validateStatePath(path string) error {
