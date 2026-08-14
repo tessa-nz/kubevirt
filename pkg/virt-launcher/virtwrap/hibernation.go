@@ -138,7 +138,12 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 	if err := os.WriteFile(hibernation.SaveInProgressPath, []byte(metadata.AttemptID), 0600); err != nil {
 		return nil, "", err
 	}
-	defer os.Remove(hibernation.SaveInProgressPath)
+	publicationComplete := false
+	defer func() {
+		if !publicationComplete {
+			_ = os.Remove(hibernation.SaveInProgressPath)
+		}
+	}()
 
 	partial := statePath + ".partial"
 	if err := domain.SaveFlags(partial, "", libvirt.DOMAIN_SAVE_PAUSED); err != nil {
@@ -181,6 +186,11 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 	if err := writeHibernationMetadata(statePath, metadata); err != nil {
 		return nil, "", err
 	}
+	// Keep the launcher-local marker after a successful publication. QEMU has
+	// exited, so the process monitor must not terminate the launcher before the
+	// RPC response reaches virt-handler. The controller's VMI deletion removes
+	// the disposable launcher pod and its marker after observing Hibernated.
+	publicationComplete = true
 	return metadata, hibernation.StateHibernated, nil
 }
 

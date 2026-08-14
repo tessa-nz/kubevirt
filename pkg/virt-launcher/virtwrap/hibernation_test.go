@@ -107,6 +107,10 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 	if metadata.DomainXMLHash != hibernation.HashBytes([]byte(committedDomainXML)) {
 		t.Fatal("save metadata did not hash libvirt's committed domain XML")
 	}
+	if _, err := os.Stat(hibernation.SaveInProgressPath); err != nil {
+		t.Fatalf("save marker was removed before the RPC response: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(hibernation.SaveInProgressPath) })
 	if _, phase, err = manager.saveVMI(vmi, statePath); err != nil || phase != hibernation.StateHibernated {
 		t.Fatalf("idempotent save failed: phase=%q err=%v", phase, err)
 	}
