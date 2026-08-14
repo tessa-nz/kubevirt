@@ -152,3 +152,15 @@ func TestArtifactErasureRequiresExplicitFinalization(t *testing.T) {
 		t.Fatal("explicit verified finalization must request erasure")
 	}
 }
+
+func TestResumeRejectedIsRetryableOnlyByExplicitResume(t *testing.T) {
+	if !retryRejectedRestore(hibernation.StateResumeRejected, hibernation.RequestResume, nil) {
+		t.Fatal("an explicit retry must be able to prove the unconsumed artifact on its source kernel")
+	}
+	if retryRejectedRestore(hibernation.StateResumeRejected, "", nil) {
+		t.Fatal("runStrategy must not retry a rejected restore automatically")
+	}
+	if retryRejectedRestore(hibernation.StateResumeRejected, hibernation.RequestResume, &v1.VirtualMachineInstance{}) {
+		t.Fatal("a rejected restore with a remaining VMI must stay terminal")
+	}
+}

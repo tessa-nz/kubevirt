@@ -41,6 +41,14 @@ func (c *Controller) reconcileHibernation(vm *virtv1.VirtualMachine, vmi *virtv1
 	if request == "" && state == "" {
 		return vm, vmi, false, nil
 	}
+	if retryRejectedRestore(state, request, vmi) {
+		updated, err := c.updateVMHibernation(vm, hibernation.StateRestoring, request, vm.Annotations[hibernation.AttemptAnnotation], "")
+		if err != nil {
+			return vm, vmi, true, err
+		}
+		updated, err = c.startVMI(updated)
+		return updated, vmi, true, err
+	}
 
 	if hibernation.IsTerminal(state) {
 		if vmi != nil {
@@ -58,6 +66,10 @@ func (c *Controller) reconcileHibernation(vm *virtv1.VirtualMachine, vmi *virtv1
 	default:
 		return vm, vmi, true, fmt.Errorf("unsupported hibernation request %q", request)
 	}
+}
+
+func retryRejectedRestore(state, request string, vmi *virtv1.VirtualMachineInstance) bool {
+	return state == hibernation.StateResumeRejected && request == hibernation.RequestResume && vmi == nil
 }
 
 func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.VirtualMachineInstance, request, state string) (*virtv1.VirtualMachine, *virtv1.VirtualMachineInstance, bool, error) {
