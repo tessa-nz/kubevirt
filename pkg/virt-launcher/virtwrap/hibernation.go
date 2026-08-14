@@ -128,6 +128,10 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 	}
 	metadata.SourceVMIUID = string(vmi.UID)
 	metadata.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := os.WriteFile(hibernation.SaveInProgressPath, []byte(metadata.AttemptID), 0600); err != nil {
+		return nil, "", err
+	}
+	defer os.Remove(hibernation.SaveInProgressPath)
 
 	partial := statePath + ".partial"
 	if err := domain.SaveFlags(partial, "", libvirt.DOMAIN_SAVE_PAUSED); err != nil {

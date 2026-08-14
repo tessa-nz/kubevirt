@@ -38,8 +38,9 @@ const (
 	LabFailBeforeConsumeAnnotation   = "hibernation.kubevirt.io/lab-fail-before-consume"
 	LabFailAfterConsumeAnnotation    = "hibernation.kubevirt.io/lab-fail-after-consume"
 
-	StateMountPath  = "/var/run/kubevirt-private/hibernation"
-	StateVolumeName = "hibernation-state"
+	StateMountPath     = "/var/run/kubevirt-private/hibernation"
+	StateVolumeName    = "hibernation-state"
+	SaveInProgressPath = "/var/run/kubevirt-private/hibernation-save-in-progress"
 
 	RequestSave          = "save"
 	RequestRestorePaused = "restore-paused"

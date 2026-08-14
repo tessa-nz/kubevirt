@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
 	cmdserver "kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cmd-server"
 
 	"kubevirt.io/client-go/log"
@@ -49,6 +50,7 @@ type monitor struct {
 	isDone                   bool
 	gracePeriod              int
 	gracePeriodStartTime     int64
+	hibernationSaveMarker    string
 	finalShutdownCallback    OnShutdownCallback
 	gracefulShutdownCallback OnGracefulShutdownCallback
 }
@@ -115,6 +117,7 @@ func NewProcessMonitor(domainName string,
 		domainName:               domainName,
 		pidDir:                   pidDir,
 		gracePeriod:              gracePeriod,
+		hibernationSaveMarker:    hibernation.SaveInProgressPath,
 		finalShutdownCallback:    finalShutdownCallback,
 		gracefulShutdownCallback: gracefulShutdownCallback,
 	}
@@ -176,6 +179,15 @@ func (mon *monitor) refresh() {
 		return
 	}
 	if exists == false {
+		if mon.hibernationSaveMarker != "" {
+			if _, markerErr := os.Stat(mon.hibernationSaveMarker); markerErr == nil {
+				log.Log.Infof("Process %s exited during hibernation save; waiting for publication", mon.domainName)
+				return
+			} else if !errors.Is(markerErr, os.ErrNotExist) {
+				log.Log.Reason(markerErr).Error("Failed to inspect hibernation save marker")
+				return
+			}
+		}
 		log.Log.Infof("Process %s and pid %d is gone!", mon.domainName, mon.pid)
 		mon.pid = 0
 		mon.isDone = true
