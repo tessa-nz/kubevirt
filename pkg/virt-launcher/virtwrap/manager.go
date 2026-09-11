@@ -44,6 +44,8 @@ import (
 	"syscall"
 	"time"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	"kubevirt.io/kubevirt/pkg/defaults"
 	drautil "kubevirt.io/kubevirt/pkg/dra"
 	"kubevirt.io/kubevirt/pkg/hypervisor"
@@ -820,6 +822,14 @@ func (l *LibvirtDomainManager) CancelVMIMigration(vmi *v1.VirtualMachineInstance
 }
 
 func (l *LibvirtDomainManager) MigrateVMI(vmi *v1.VirtualMachineInstance, options *cmdclient.MigrationOptions) error {
+	l.domainModifyLock.Lock()
+	defer l.domainModifyLock.Unlock()
+	if vmi.Annotations[hibernation.StatePVCAnnotation] != "" {
+		return fmt.Errorf("migration is unsupported with hibernation state storage")
+	}
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return err
+	}
 	return l.startMigration(vmi, options)
 }
 
@@ -1381,6 +1391,9 @@ func isSerialConsoleLogEnabled(clusterSerialConsoleLogDisabled bool, vmi *v1.Vir
 func (l *LibvirtDomainManager) SyncVMI(vmi *v1.VirtualMachineInstance, allowEmulation bool, options *cmdv1.VirtualMachineOptions) (*api.DomainSpec, error) {
 	l.domainModifyLock.Lock()
 	defer l.domainModifyLock.Unlock()
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return nil, err
+	}
 
 	logger := log.Log.Object(vmi)
 

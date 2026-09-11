@@ -193,3 +193,18 @@ func TestHibernationRequestBypassesRestoredDomainMigrationGuard(t *testing.T) {
 		t.Fatal("ordinary paused migration must retain the migration guard")
 	}
 }
+
+func TestSyncHibernationDoesNotRunOrdinarySyncBetweenRequests(t *testing.T) {
+	for _, state := range []string{hibernation.StateSaving, hibernation.StateHibernated, hibernation.StateRestoredPaused, hibernation.StateRestoreCommittedPaused, hibernation.StateRunningAwaitingVerification} {
+		t.Run(state, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := cmdclient.NewMockLauncherClient(ctrl)
+			controller := &VirtualMachineController{}
+			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StateAnnotation: state}}}
+			// No regular Sync RPC or ordinary-start configuration lookup is permitted.
+			if err := controller.syncVirtualMachine(client, vmi, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

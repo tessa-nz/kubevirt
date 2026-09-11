@@ -2159,6 +2159,11 @@ func (c *VirtualMachineController) syncVirtualMachine(client cmdclient.LauncherC
 	if request := vmi.Annotations[hibernation.RequestAnnotation]; request != "" {
 		return c.syncHibernation(client, vmi, request)
 	}
+	// The paused restore must wait for the controller's consumption request.
+	// Normal sync can otherwise unpause or cold-start an active attempt.
+	if hibernation.Active(vmi.Annotations) {
+		return nil
+	}
 	smbios := c.clusterConfig.GetSMBIOS()
 	period := c.clusterConfig.GetMemBalloonStatsPeriod()
 

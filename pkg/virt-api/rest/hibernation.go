@@ -124,7 +124,10 @@ func validateHibernationRequest(vm *v1.VirtualMachine, vmi *v1.VirtualMachineIns
 		if state != "" && state != hibernation.StateRunning && !(state == hibernation.StateSaving && request == operation) {
 			return fmt.Errorf("cannot hibernate from state %q", state)
 		}
-		if vmi == nil || !vmi.IsRunning() {
+		if len(vm.Status.StateChangeRequests) != 0 || vm.Status.SnapshotInProgress != nil {
+			return fmt.Errorf("hibernation cannot overlap a pending lifecycle or snapshot operation")
+		}
+		if vmi == nil || vmi.DeletionTimestamp != nil || !vmi.IsRunning() {
 			return fmt.Errorf("hibernation requires a running VMI")
 		}
 		for _, condition := range vmi.Status.Conditions {
@@ -178,7 +181,7 @@ func (app *SubresourceAPIApp) validateHibernationStorage(ctx context.Context, vm
 	}
 	for _, mode := range pvc.Spec.AccessModes {
 		if mode != k8sv1.ReadWriteOnce && mode != k8sv1.ReadWriteOncePod {
-			return errors.NewConflict(v1.Resource("persistentvolumeclaim"), name, fmt.Errorf("hibernation state storage must have exclusive write access"))
+			return errors.NewConflict(v1.Resource("persistentvolumeclaim"), name, fmt.Errorf("hibernation state storage requires RWO or RWOP access mode"))
 		}
 	}
 	storageClass, err := app.virtCli.StorageV1().StorageClasses().Get(ctx, *pvc.Spec.StorageClassName, metav1.GetOptions{})
@@ -216,6 +219,13 @@ func (app *SubresourceAPIApp) rejectConflictingHibernation(vmi *v1.VirtualMachin
 	}
 	if active {
 		return errors.NewConflict(v1.Resource("virtualmachineinstance"), vmi.Name, fmt.Errorf("lifecycle operation conflicts with an active hibernation attempt"))
+	}
+	return nil
+}
+
+func rejectVMHibernationLifecycle(vm *v1.VirtualMachine) *errors.StatusError {
+	if hibernation.Active(vm.Annotations) {
+		return errors.NewConflict(v1.Resource("virtualmachine"), vm.Name, fmt.Errorf("VM lifecycle operation conflicts with an active hibernation attempt"))
 	}
 	return nil
 }

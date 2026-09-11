@@ -132,6 +132,9 @@ func TestCPUFingerprintIgnoresDynamicFrequency(t *testing.T) {
 }
 
 func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
+	if _, err := os.Stat("/dev/kvm"); errors.Is(err, os.ErrNotExist) {
+		t.Skip("requires host KVM capability readback; run in the KVM-enabled lab container")
+	}
 	ctrl := gomock.NewController(t)
 	connection := cli.NewMockConnection(ctrl)
 	domain := cli.NewMockVirDomain(ctrl)
@@ -177,6 +180,13 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 		t.Fatalf("save marker was removed before the RPC response: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(hibernation.SaveInProgressPath) })
+	staleVMI := &v1.VirtualMachineInstance{}
+	if _, err := manager.SyncVMI(staleVMI, false, nil); err == nil {
+		t.Fatal("queued ordinary sync bypassed the saved-state marker")
+	}
+	if err := manager.MigrateVMI(staleVMI, nil); err == nil {
+		t.Fatal("queued migration bypassed the saved-state marker")
+	}
 	if _, phase, err = manager.saveVMI(vmi, statePath); err != nil || phase != hibernation.StateHibernated {
 		t.Fatalf("idempotent save failed: phase=%q err=%v", phase, err)
 	}
@@ -403,5 +413,20 @@ func TestHibernationBlocksLauncherLifecycleMutation(t *testing.T) {
 	}
 	if err := manager.FreezeVMI(vmi, 30); err == nil {
 		t.Fatal("active attempt allowed freeze")
+	}
+}
+
+func TestHibernationBlocksOrdinarySyncAndMigration(t *testing.T) {
+	manager := &LibvirtDomainManager{}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateRestoredPaused}}}
+	if _, err := manager.SyncVMI(vmi, false, nil); err == nil {
+		t.Fatal("ordinary sync bypassed active restore")
+	}
+	if err := manager.MigrateVMI(vmi, nil); err == nil {
+		t.Fatal("migration bypassed active restore")
+	}
+	vmi.Annotations = map[string]string{hibernation.StatePVCAnnotation: "state"}
+	if err := manager.MigrateVMI(vmi, nil); err == nil {
+		t.Fatal("migration accepted state-configured VMI")
 	}
 }

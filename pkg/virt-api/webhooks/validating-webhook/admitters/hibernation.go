@@ -33,10 +33,11 @@ func admitHibernationDelete(ar *admissionv1.AdmissionReview, serviceAccounts map
 		return webhookutils.ToAdmissionResponseError(err)
 	}
 	_, trusted := serviceAccounts[ar.Request.UserInfo.Username]
-	if !trusted && hibernation.Active(previous.Annotations) {
+	directConfiguredVMI := ar.Request.Resource.Resource == "virtualmachineinstances" && previous.Annotations[hibernation.StatePVCAnnotation] != ""
+	if !trusted && (hibernation.Active(previous.Annotations) || directConfiguredVMI) {
 		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
 			Type:    metav1.CauseTypeFieldValueNotSupported,
-			Message: "cannot delete a VM or VMI while a hibernation attempt is active; complete or recover the attempt first",
+			Message: "direct deletion is blocked for an active hibernation attempt or state-configured VMI; use VM lifecycle subresources after completing or recovering the attempt",
 			Field:   "metadata.annotations",
 		}})
 	}

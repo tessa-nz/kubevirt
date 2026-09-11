@@ -112,6 +112,9 @@ func (admitter *VMIUpdateAdmitter) Admit(_ context.Context, ar *admissionv1.Admi
 			Field:   "metadata.annotations",
 		}})
 	}
+	if (hibernation.Active(oldVMI.Annotations) || oldVMI.Annotations[hibernation.StatePVCAnnotation] != "") && !equality.Semantic.DeepEqual(oldVMI.OwnerReferences, newVMI.OwnerReferences) {
+		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{Type: metav1.CauseTypeFieldValueNotSupported, Message: "ownership is immutable while hibernation state is configured", Field: "metadata.ownerReferences"}})
+	}
 	if !equality.Semantic.DeepEqual(newVMI.Spec, oldVMI.Spec) {
 		if hibernation.Active(oldVMI.Annotations) {
 			return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{

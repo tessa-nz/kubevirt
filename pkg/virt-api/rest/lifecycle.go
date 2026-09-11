@@ -49,6 +49,10 @@ func (app *SubresourceAPIApp) StartVMRequestHandler(request *restful.Request, re
 		writeError(statusErr, response)
 		return
 	}
+	if err := rejectVMHibernationLifecycle(vm); err != nil {
+		writeError(err, response)
+		return
+	}
 
 	vmi, err := app.virtCli.VirtualMachineInstance(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil && !errors.IsNotFound(err) {
@@ -180,6 +184,10 @@ func (app *SubresourceAPIApp) StopVMRequestHandler(request *restful.Request, res
 	vm, statusErr := app.fetchVirtualMachine(name, namespace)
 	if statusErr != nil {
 		writeError(statusErr, response)
+		return
+	}
+	if err := rejectVMHibernationLifecycle(vm); err != nil {
+		writeError(err, response)
 		return
 	}
 
@@ -422,6 +430,10 @@ func (app *SubresourceAPIApp) RestartVMRequestHandler(request *restful.Request, 
 	vm, statusErr := app.fetchVirtualMachine(name, namespace)
 	if statusErr != nil {
 		writeError(statusErr, response)
+		return
+	}
+	if err := rejectVMHibernationLifecycle(vm); err != nil {
+		writeError(err, response)
 		return
 	}
 	if controller.NewVirtualMachineConditionManager().HasConditionWithStatus(vm,

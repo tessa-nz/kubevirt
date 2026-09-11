@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 
+	kubevirtfake "kubevirt.io/client-go/kubevirt/fake"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfield "k8s.io/apimachinery/pkg/util/validation/field"
 	poolv1 "kubevirt.io/api/pool/v1beta1"
@@ -178,5 +180,52 @@ func TestHibernationParentTemplatesCannotForgeControl(t *testing.T) {
 			}
 			t.Fatalf("parent template control was accepted: %+v", causes)
 		})
+	}
+}
+
+func TestHibernationConfiguredVMICannotBeDeletedOrMigrated(t *testing.T) {
+	config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{})
+	vmi := api.NewMinimalVMI("test")
+	vmi.Namespace = "default"
+	vmi.Annotations = map[string]string{hibernation.StatePVCAnnotation: "state"}
+	raw, _ := json.Marshal(vmi)
+	ar := &admissionv1.AdmissionReview{Request: &admissionv1.AdmissionRequest{Resource: webhooks.VirtualMachineInstanceGroupVersionResource, Operation: admissionv1.Delete, OldObject: runtime.RawExtension{Raw: raw}}}
+	response := NewVMIUpdateAdmitter(config, webhooks.KubeVirtServiceAccounts("kubevirt")).Admit(context.Background(), ar)
+	if response.Allowed {
+		t.Fatal("direct delete passed before save request propagation")
+	}
+	migration := &v1.VirtualMachineInstanceMigration{ObjectMeta: metav1.ObjectMeta{Name: "migration", Namespace: "default"}, Spec: v1.VirtualMachineInstanceMigrationSpec{VMIName: "test"}}
+	raw, _ = json.Marshal(migration)
+	ar = &admissionv1.AdmissionReview{Request: &admissionv1.AdmissionRequest{Resource: webhooks.MigrationGroupVersionResource, Operation: admissionv1.Create, Object: runtime.RawExtension{Raw: raw}}}
+	response = NewMigrationCreateAdmitter(kubevirtfake.NewSimpleClientset(vmi), config, nil).Admit(context.Background(), ar)
+	if response.Allowed || !strings.Contains(response.Result.Message, "hibernation") {
+		t.Fatalf("migration bypassed preconfigured state: %+v", response)
+	}
+}
+
+func TestHibernationOwnershipCannotBeTransferred(t *testing.T) {
+	config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{})
+	old := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StatePVCAnnotation: "state"}}, Spec: v1.VirtualMachineSpec{Running: pointer.P(false), Template: &v1.VirtualMachineInstanceTemplateSpec{Spec: api.NewMinimalVMI("test").Spec}}}
+	updated := old.DeepCopy()
+	updated.OwnerReferences = []metav1.OwnerReference{{APIVersion: "pool.kubevirt.io/v1beta1", Kind: "VirtualMachinePool", Name: "pool", UID: "pool-uid", Controller: pointer.P(true)}}
+	oldRaw, _ := json.Marshal(old)
+	newRaw, _ := json.Marshal(updated)
+	ar := &admissionv1.AdmissionReview{Request: &admissionv1.AdmissionRequest{Resource: webhooks.VirtualMachineGroupVersionResource, Operation: admissionv1.Update, OldObject: runtime.RawExtension{Raw: oldRaw}, Object: runtime.RawExtension{Raw: newRaw}}}
+	response := (&VMsAdmitter{ClusterConfig: config}).Admit(context.Background(), ar)
+	if response.Allowed || response.Result.Details.Causes[0].Field != "metadata.ownerReferences" {
+		t.Fatalf("VM ownership change bypassed attempt: %+v", response)
+	}
+	oldVMI := api.NewMinimalVMI("test")
+	oldVMI.Annotations = old.Annotations
+	newVMI := oldVMI.DeepCopy()
+	newVMI.OwnerReferences = updated.OwnerReferences
+	oldRaw, _ = json.Marshal(oldVMI)
+	newRaw, _ = json.Marshal(newVMI)
+	ar.Request.Resource = webhooks.VirtualMachineInstanceGroupVersionResource
+	ar.Request.OldObject.Raw = oldRaw
+	ar.Request.Object.Raw = newRaw
+	response = NewVMIUpdateAdmitter(config, nil).Admit(context.Background(), ar)
+	if response.Allowed || response.Result.Details.Causes[0].Field != "metadata.ownerReferences" {
+		t.Fatalf("VMI ownership change bypassed attempt: %+v", response)
 	}
 }

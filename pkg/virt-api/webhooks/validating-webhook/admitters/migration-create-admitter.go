@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"strings"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	admissionv1 "k8s.io/api/admission/v1"
 	k8sv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -129,6 +131,9 @@ func (admitter *MigrationCreateAdmitter) Admit(ctx context.Context, ar *admissio
 		return webhookutils.ToAdmissionResponseError(err)
 	}
 
+	if vmi.Annotations[hibernation.StatePVCAnnotation] != "" || hibernation.Active(vmi.Annotations) {
+		return webhookutils.ToAdmissionResponseError(fmt.Errorf("migration is unsupported with hibernation state storage"))
+	}
 	// Don't allow introducing a migration job for a VMI that has already finalized
 	if vmi.IsFinal() {
 		return webhookutils.ToAdmissionResponseError(fmt.Errorf("Cannot migrate VMI in finalized state."))

@@ -154,3 +154,42 @@ func TestHibernationBlocksOrdinaryLifecycleRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestHibernationBlocksVMStartStopRestart(t *testing.T) {
+	for _, operation := range []string{"start", "stop", "restart"} {
+		t.Run(operation, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := kubecli.NewMockKubevirtClient(ctrl)
+			vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", Annotations: map[string]string{hibernation.RequestAnnotation: hibernation.RequestHibernate}}}
+			client.EXPECT().VirtualMachine("default").Return(vmClient)
+			vmClient.EXPECT().Get(gomock.Any(), "test", gomock.Any()).Return(vm, nil)
+			app := &SubresourceAPIApp{virtCli: client}
+			ws := new(restful.WebService).Path("/namespaces/{namespace}/virtualmachines/{name}")
+			handlers := map[string]restful.RouteFunction{"start": app.StartVMRequestHandler, "stop": app.StopVMRequestHandler, "restart": app.RestartVMRequestHandler}
+			ws.Route(ws.PUT("/" + operation).To(handlers[operation]))
+			container := restful.NewContainer()
+			container.Add(ws)
+			resp := httptest.NewRecorder()
+			container.ServeHTTP(resp, httptest.NewRequest(http.MethodPut, "/namespaces/default/virtualmachines/test/"+operation, nil))
+			if resp.Code != 409 || !strings.Contains(resp.Body.String(), "hibernation") {
+				t.Fatalf("VM %s bypassed attempt: %d %s", operation, resp.Code, resp.Body.String())
+			}
+		})
+	}
+}
+
+func TestHibernateRejectsPendingStopOrDeletingVMI(t *testing.T) {
+	vm := &v1.VirtualMachine{}
+	vmi := &v1.VirtualMachineInstance{Status: v1.VirtualMachineInstanceStatus{Phase: v1.Running}}
+	vm.Status.StateChangeRequests = []v1.VirtualMachineStateChangeRequest{{Action: v1.StopRequest}}
+	if err := validateHibernationRequest(vm, vmi, hibernation.RequestHibernate); err == nil {
+		t.Fatal("hibernate accepted a queued stop")
+	}
+	vm.Status.StateChangeRequests = nil
+	now := metav1.Now()
+	vmi.DeletionTimestamp = &now
+	if err := validateHibernationRequest(vm, vmi, hibernation.RequestHibernate); err == nil {
+		t.Fatal("hibernate accepted a deleting VMI")
+	}
+}
