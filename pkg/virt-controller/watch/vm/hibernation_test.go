@@ -21,6 +21,7 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -242,5 +243,32 @@ func TestHibernationIgnoresPriorAttemptOutcome(t *testing.T) {
 	vmi.Annotations[hibernation.StateAnnotation] = hibernation.StateSaving
 	if state, _ := vmiHibernationOutcome(vmi); state != hibernation.StateSaving {
 		t.Fatalf("old condition superseded new state: %s", state)
+	}
+}
+
+func TestHibernationRetriesPartiallyCompletedSaveRejection(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := kubecli.NewMockKubevirtClient(ctrl)
+	vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+	vmiClient := kubecli.NewMockVirtualMachineInstanceInterface(ctrl)
+	controller := &Controller{clientset: client}
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaving, hibernation.AttemptAnnotation: "same"}}}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaveRejected, hibernation.AttemptAnnotation: "same"}}}
+	client.EXPECT().VirtualMachineInstance("default").Return(vmiClient)
+	vmiClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachineInstance, _ metav1.UpdateOptions) (*v1.VirtualMachineInstance, error) {
+		return updated, nil
+	})
+	client.EXPECT().VirtualMachine("default").Return(vmClient).Times(2)
+	first := vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("VM update response lost"))
+	vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).After(first).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+		return updated, nil
+	})
+	_, runningVMI, _, err := controller.reconcileHibernation(vm, vmi)
+	if err == nil || runningVMI.Annotations[hibernation.StateAnnotation] != hibernation.StateRunning {
+		t.Fatalf("first update did not reproduce partial cleanup: %v", err)
+	}
+	updated, _, _, err := controller.reconcileHibernation(vm, runningVMI)
+	if err != nil || updated.Annotations[hibernation.StateAnnotation] != hibernation.StateRunning {
+		t.Fatalf("cleanup retry remained stuck: %v", err)
 	}
 }

@@ -103,12 +103,17 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 			return vm, updatedVMI, true, err
 		}
 		vmiState, vmiMessage := vmiHibernationOutcome(vmi)
-		if vmiState == hibernation.StateSaveRejected {
+		if vmiState == hibernation.StateSaveRejected || (vmiState == hibernation.StateRunning && vmi.Annotations[hibernation.RequestAnnotation] == "") {
 			// The launcher rejected the request before changing the running
-			// domain. Preserve that guest; a failed save is not a stop request.
-			updatedVMI, err := c.setVMIHibernationRequest(vmi, "", hibernation.StateRunning)
-			if err != nil {
-				return vm, vmi, true, err
+			// domain. Finish the VM update even if an earlier reconciliation
+			// cleared the VMI request but could not update the VM.
+			updatedVMI := vmi
+			if vmiState != hibernation.StateRunning {
+				var err error
+				updatedVMI, err = c.setVMIHibernationRequest(vmi, "", hibernation.StateRunning)
+				if err != nil {
+					return vm, vmi, true, err
+				}
 			}
 			updatedVM, err := c.updateVMHibernation(vm, hibernation.StateRunning, "", "", vmiMessage)
 			return updatedVM, updatedVMI, true, err
