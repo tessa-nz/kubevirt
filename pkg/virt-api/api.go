@@ -542,6 +542,27 @@ func (app *virtAPIApp) composeSubresources() {
 			Returns(http.StatusOK, "OK", "").
 			Returns(http.StatusBadRequest, httpStatusBadRequestMessage, ""))
 
+		for _, operation := range []struct {
+			name        string
+			handler     restful.RouteFunction
+			description string
+		}{
+			{"hibernate", subresourceApp.HibernateVMRequestHandler, "Save a VirtualMachine for a planned host restart."},
+			{"resume", subresourceApp.ResumeVMRequestHandler, "Resume a hibernated VirtualMachine."},
+			{"finalizehibernation", subresourceApp.FinalizeHibernationVMRequestHandler, "Finalize an operator-verified hibernation resume."},
+		} {
+			subws.Route(subws.PUT(definitions.NamespacedResourcePath(subresourcesvmGVR)+definitions.SubResourcePath(operation.name)).
+				To(operation.handler).
+				Consumes(mime.MIME_ANY).
+				Reads(metav1.UpdateOptions{}).
+				Param(definitions.NamespaceParam(subws)).Param(definitions.NameParam(subws)).
+				Operation(version.Version+operation.name).
+				Doc(operation.description).
+				Returns(http.StatusAccepted, "Accepted", "").
+				Returns(http.StatusConflict, "Conflict", "").
+				Returns(http.StatusBadRequest, httpStatusBadRequestMessage, ""))
+		}
+
 		subws.Route(subws.PUT(definitions.NamespacedResourcePath(subresourcesvmGVR)+definitions.SubResourcePath("memorydump")).
 			To(subresourceApp.MemoryDumpVMRequestHandler).
 			Consumes(mime.MIME_ANY).
@@ -661,6 +682,9 @@ func (app *virtAPIApp) composeSubresources() {
 				list.GroupVersion = version.Group + "/" + version.Version
 				list.APIVersion = "v1"
 				list.APIResources = []metav1.APIResource{
+					{Name: "virtualmachines/hibernate", Namespaced: true, Verbs: metav1.Verbs{"update"}},
+					{Name: "virtualmachines/resume", Namespaced: true, Verbs: metav1.Verbs{"update"}},
+					{Name: "virtualmachines/finalizehibernation", Namespaced: true, Verbs: metav1.Verbs{"update"}},
 					{
 						Name:       "expand-vm-spec",
 						Namespaced: true,

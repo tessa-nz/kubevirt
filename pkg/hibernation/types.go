@@ -34,6 +34,7 @@ const (
 	SpecHashAnnotation               = "hibernation.kubevirt.io/spec-hash"
 	PVCIdentitiesAnnotation          = "hibernation.kubevirt.io/pvc-identities"
 	ErrorAnnotation                  = "hibernation.kubevirt.io/error"
+	ArtifactDigestAnnotation         = "hibernation.kubevirt.io/artifact-digest"
 	LabAllowKernelMismatchAnnotation = "hibernation.kubevirt.io/lab-compatibility-override"
 	LabFailBeforeConsumeAnnotation   = "hibernation.kubevirt.io/lab-fail-before-consume"
 	LabFailAfterConsumeAnnotation    = "hibernation.kubevirt.io/lab-fail-after-consume"
@@ -58,6 +59,7 @@ const (
 	StateRestoreCommittedPaused      = "RestoreCommittedPaused"
 	StateRunningAwaitingVerification = "RunningAwaitingVerification"
 	StateSaveIncomplete              = "SaveIncomplete"
+	StateSaveRejected                = "SaveRejected"
 	StateResumeRejected              = "ResumeRejected"
 	StateRestoreCommitLost           = "RestoreCommitLost"
 
@@ -111,6 +113,20 @@ func Hash(value interface{}) (string, error) {
 func HashBytes(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
+}
+
+// ArtifactDigest binds the saved memory, domain, disks, and compatibility
+// metadata. The digest is retained by the controller outside the state PVC.
+// Consumption and restore observations may change without changing the image.
+func ArtifactDigest(metadata Metadata) (string, error) {
+	metadata.Consumed = false
+	metadata.ConsumedAt = ""
+	metadata.ErasedAt = ""
+	metadata.ValidatedKernelPair = ""
+	metadata.OverrideAttempted = false
+	metadata.OverrideKernel = ""
+	metadata.OverrideKVM = ""
+	return Hash(metadata)
 }
 
 func ValidateCompatibility(saved, current Metadata, options CompatibilityOptions) error {

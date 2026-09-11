@@ -270,6 +270,9 @@ func newAdminClusterRole() *rbacv1.ClusterRole {
 					apiVMAddVolume,
 					apiVMRemoveVolume,
 					apiVMMemoryDump,
+					"virtualmachines/hibernate",
+					"virtualmachines/resume",
+					"virtualmachines/finalizehibernation",
 					apiVMEvacuateCancel,
 				},
 				Verbs: []string{

@@ -20,6 +20,7 @@
 package featuregate
 
 const (
+	HibernationGate       = "Hibernation"
 	CPUManager            = "CPUManager"
 	IgnitionGate          = "ExperimentalIgnitionSupport"
 	HypervStrictCheckGate = "HypervStrictCheck"
@@ -290,6 +291,7 @@ const (
 )
 
 func init() {
+	RegisterFeatureGate(FeatureGate{Name: HibernationGate, State: Alpha})
 	RegisterFeatureGate(FeatureGate{Name: LibvirtHooksServerAndClient, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: ImageVolume, State: Beta})
 	RegisterFeatureGate(FeatureGate{Name: CPUManager, State: Alpha})

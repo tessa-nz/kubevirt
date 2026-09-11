@@ -1909,6 +1909,7 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 		hibernation.AttemptAnnotation,
 		hibernation.VMUIDAnnotation,
 		hibernation.PVCIdentitiesAnnotation,
+		hibernation.ArtifactDigestAnnotation,
 		hibernation.LabAllowKernelMismatchAnnotation,
 		hibernation.LabFailBeforeConsumeAnnotation,
 		hibernation.LabFailAfterConsumeAnnotation,

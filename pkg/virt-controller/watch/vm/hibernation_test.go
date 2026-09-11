@@ -19,8 +19,12 @@
 package vm
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+
+	"go.uber.org/mock/gomock"
+	"kubevirt.io/client-go/kubecli"
 
 	k8score "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -162,5 +166,57 @@ func TestResumeRejectedIsRetryableOnlyByExplicitResume(t *testing.T) {
 	}
 	if retryRejectedRestore(hibernation.StateResumeRejected, hibernation.RequestResume, &v1.VirtualMachineInstance{}) {
 		t.Fatal("a rejected restore with a remaining VMI must stay terminal")
+	}
+}
+
+func TestHibernationAnchorsDigestBeforeSourceDeletion(t *testing.T) {
+	for _, digest := range []string{"", "artifact-digest"} {
+		t.Run(digest, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := kubecli.NewMockKubevirtClient(ctrl)
+			vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+			controller := &Controller{clientset: client}
+			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaving}}}
+			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateHibernated, hibernation.ArtifactDigestAnnotation: digest}}}
+			if digest != "" {
+				client.EXPECT().VirtualMachine("default").Return(vmClient)
+				vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+					if updated.Annotations[hibernation.ArtifactDigestAnnotation] != digest || updated.Annotations[hibernation.StateAnnotation] != hibernation.StateHibernated {
+						t.Fatalf("source receipt not anchored: %+v", updated.Annotations)
+					}
+					return updated, nil
+				})
+			}
+			// No VMI delete is expected before the durable VM update is observed.
+			_, _, handled, err := controller.reconcileHibernation(vm, vmi)
+			if !handled || (err == nil) != (digest != "") {
+				t.Fatalf("handled=%v err=%v", handled, err)
+			}
+		})
+	}
+}
+
+func TestHibernationSaveRejectionKeepsRunningVMI(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := kubecli.NewMockKubevirtClient(ctrl)
+	vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+	vmiClient := kubecli.NewMockVirtualMachineInstanceInterface(ctrl)
+	controller := &Controller{clientset: client}
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaving}}}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaveRejected}}}
+	client.EXPECT().VirtualMachineInstance("default").Return(vmiClient)
+	vmiClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachineInstance, _ metav1.UpdateOptions) (*v1.VirtualMachineInstance, error) {
+		if updated.Annotations[hibernation.StateAnnotation] != hibernation.StateRunning || updated.Annotations[hibernation.RequestAnnotation] != "" {
+			t.Fatal("rejected save did not release the running VMI")
+		}
+		return updated, nil
+	})
+	client.EXPECT().VirtualMachine("default").Return(vmClient)
+	vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+		return updated, nil
+	})
+	_, _, _, err := controller.reconcileHibernation(vm, vmi)
+	if err != nil {
+		t.Fatal(err)
 	}
 }

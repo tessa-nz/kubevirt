@@ -27,6 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	v1 "kubevirt.io/api/core/v1"
 
 	storageadmitters "kubevirt.io/kubevirt/pkg/storage/admitters"
@@ -100,7 +102,21 @@ func (admitter *VMIUpdateAdmitter) Admit(_ context.Context, ar *admissionv1.Admi
 
 	// Reject VMI update if VMI spec changed
 	_, isKubeVirtServiceAccount := admitter.kubeVirtServiceAccounts[ar.Request.UserInfo.Username]
+	if !isKubeVirtServiceAccount && hibernation.ControlChanged(oldVMI.Annotations, newVMI.Annotations, false) {
+		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueNotSupported,
+			Message: "hibernation control annotations are reserved for KubeVirt service accounts",
+			Field:   "metadata.annotations",
+		}})
+	}
 	if !equality.Semantic.DeepEqual(newVMI.Spec, oldVMI.Spec) {
+		if hibernation.Active(oldVMI.Annotations) {
+			return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
+				Type:    metav1.CauseTypeFieldValueNotSupported,
+				Message: "VMI specification is immutable while a hibernation attempt is active",
+				Field:   "spec",
+			}})
+		}
 		// Only allow the KubeVirt SA to modify the VMI spec, since that means it went through the sub resource.
 		if isKubeVirtServiceAccount {
 			hotplugResponse := admitHotplug(oldVMI, newVMI, admitter.clusterConfig)

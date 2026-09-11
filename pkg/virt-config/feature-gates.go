@@ -75,6 +75,10 @@ func (config *ClusterConfig) SnapshotEnabled() bool {
 	return config.isFeatureGateEnabled(featuregate.SnapshotGate)
 }
 
+func (config *ClusterConfig) HibernationEnabled() bool {
+	return config.isFeatureGateEnabled(featuregate.HibernationGate)
+}
+
 func (config *ClusterConfig) PluginsEnabled() bool {
 	return config.isFeatureGateEnabled(featuregate.PluginsGate)
 }

@@ -79,6 +79,11 @@ func newApiServerClusterRole() *rbacv1.ClusterRole {
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
+				APIGroups: []string{"storage.k8s.io"},
+				Resources: []string{"storageclasses"},
+				Verbs:     []string{"get"},
+			},
+			{
 				APIGroups: []string{
 					"",
 				},

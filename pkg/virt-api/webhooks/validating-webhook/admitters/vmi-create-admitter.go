@@ -35,6 +35,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	k8sfield "k8s.io/apimachinery/pkg/util/validation/field"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	v1 "kubevirt.io/api/core/v1"
 
 	"kubevirt.io/kubevirt/pkg/downwardmetrics"
@@ -1250,6 +1252,13 @@ func ValidateVirtualMachineInstanceMetadata(field *k8sfield.Path, metadata *meta
 	// Validate kubevirt.io labels presence. Restricted labels allowed
 	// to be created only by known service accounts
 	if !isKubeVirtServiceAccount {
+		if hibernation.ControlChanged(nil, annotations, false) {
+			causes = append(causes, metav1.StatusCause{
+				Type:    metav1.CauseTypeFieldValueNotSupported,
+				Message: "hibernation control annotations are reserved for KubeVirt service accounts",
+				Field:   field.Child("annotations").String(),
+			})
+		}
 		if len(filterKubevirtLabels(labels)) > 0 {
 			causes = append(causes, metav1.StatusCause{
 				Type:    metav1.CauseTypeFieldValueNotSupported,

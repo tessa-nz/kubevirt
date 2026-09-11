@@ -2183,32 +2183,51 @@ func (c *VirtualMachineController) syncVirtualMachine(client cmdclient.LauncherC
 func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClient, vmi *v1.VirtualMachineInstance, request string) error {
 	action := cmdv1.HibernationAction_HIBERNATION_ACTION_UNSPECIFIED
 	successState := ""
-	failureState := hibernation.StateResumeRejected
 	switch request {
 	case hibernation.RequestSave:
 		action = cmdv1.HibernationAction_HIBERNATION_ACTION_SAVE
 		successState = hibernation.StateHibernated
-		failureState = hibernation.StateSaveIncomplete
 	case hibernation.RequestRestorePaused:
 		action = cmdv1.HibernationAction_HIBERNATION_ACTION_RESTORE_PAUSED
 		successState = hibernation.StateRestoredPaused
 	case hibernation.RequestCommitUnpause:
 		action = cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE
 		successState = hibernation.StateRunningAwaitingVerification
-		failureState = hibernation.StateRestoreCommitLost
 	case hibernation.RequestErase:
 		action = cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE
 		successState = hibernation.StateRunning
 	default:
 		return fmt.Errorf("unknown hibernation request %q", request)
 	}
-	allowKernelMismatch := vmi.Annotations[hibernation.LabAllowKernelMismatchAnnotation] != "" &&
+	allowKernelMismatch := hibernation.LabEnabled && vmi.Annotations[hibernation.LabAllowKernelMismatchAnnotation] != "" &&
 		vmi.Annotations[hibernation.LabAllowKernelMismatchAnnotation] == vmi.Annotations[hibernation.AttemptAnnotation]
 	response, err := client.HibernateVirtualMachine(vmi, action, filepath.Join(hibernation.StateMountPath, "state.save"), allowKernelMismatch)
 	if err != nil {
-		vmi.Annotations[hibernation.StateAnnotation] = failureState
+		// A dropped response does not prove that save, restore, or consumption
+		// failed. Keep the same request and attempt for idempotent reconciliation.
+		if response != nil && response.Response != nil && !response.Response.Success &&
+			(hibernation.IsTerminal(response.Phase) || response.Phase == hibernation.StateSaveRejected) {
+			vmi.Annotations[hibernation.StateAnnotation] = response.Phase
+		}
 		vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
 		return err
+	}
+	if request == hibernation.RequestSave {
+		if response == nil || len(response.MetadataJson) == 0 {
+			return fmt.Errorf("save response is missing its artifact metadata")
+		}
+		var metadata hibernation.Metadata
+		if err := json.Unmarshal(response.MetadataJson, &metadata); err != nil {
+			return fmt.Errorf("invalid save response metadata: %w", err)
+		}
+		if !metadata.Completed || metadata.Consumed || metadata.AttemptID == "" || metadata.VMUID == "" || metadata.AttemptID != vmi.Annotations[hibernation.AttemptAnnotation] || metadata.VMUID != vmi.Annotations[hibernation.VMUIDAnnotation] {
+			return fmt.Errorf("save response does not describe the current completed attempt")
+		}
+		digest, err := hibernation.ArtifactDigest(metadata)
+		if err != nil {
+			return err
+		}
+		vmi.Annotations[hibernation.ArtifactDigestAnnotation] = digest
 	}
 	vmi.Annotations[hibernation.StateAnnotation] = successState
 	delete(vmi.Annotations, hibernation.RequestAnnotation)

@@ -19,6 +19,7 @@
 package virtwrap
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -34,6 +35,71 @@ import (
 	"kubevirt.io/kubevirt/pkg/hibernation"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
 )
+
+func TestCommitRecoversLostUnpauseResponseWithoutReplay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	connection := cli.NewMockConnection(ctrl)
+	domain := cli.NewMockVirDomain(ctrl)
+	manager := &LibvirtDomainManager{virConn: connection}
+	statePath := filepath.Join(t.TempDir(), "state.save")
+	if err := writeHibernationMetadata(statePath, &hibernation.Metadata{AttemptID: "attempt-1"}); err != nil {
+		t.Fatal(err)
+	}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "default", Name: "tracer",
+		Annotations: map[string]string{hibernation.AttemptAnnotation: "attempt-1"},
+	}}
+	connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil).Times(2)
+	gomock.InOrder(
+		domain.EXPECT().GetState().Return(libvirt.DOMAIN_PAUSED, 0, nil),
+		domain.EXPECT().Resume().Return(context.DeadlineExceeded),
+		domain.EXPECT().GetState().Return(libvirt.DOMAIN_RUNNING, 0, nil),
+	)
+	domain.EXPECT().Free().Return(nil).Times(2)
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || hibernation.RejectionPhase(err) != "" {
+		t.Fatalf("lost unpause response must remain an unknown outcome: %v", err)
+	}
+	metadata, phase, err := manager.commitAndUnpauseVMI(vmi, statePath)
+	if err != nil || phase != hibernation.StateRunningAwaitingVerification || !metadata.Consumed {
+		t.Fatalf("failed to recover the running domain: phase=%s err=%v", phase, err)
+	}
+}
+
+func TestCommitDoesNotDestroyGuestAfterLookupTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	connection := cli.NewMockConnection(ctrl)
+	manager := &LibvirtDomainManager{virConn: connection}
+	statePath := filepath.Join(t.TempDir(), "state.save")
+	if err := writeHibernationMetadata(statePath, &hibernation.Metadata{AttemptID: "attempt-1", Consumed: true}); err != nil {
+		t.Fatal(err)
+	}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "default", Name: "tracer",
+		Annotations: map[string]string{hibernation.AttemptAnnotation: "attempt-1"},
+	}}
+	connection.EXPECT().LookupDomainByName("default_tracer").Return(nil, context.DeadlineExceeded)
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); !errors.Is(err, context.DeadlineExceeded) || hibernation.RejectionPhase(err) != "" {
+		t.Fatalf("lookup timeout was treated as proof of a lost domain: %v", err)
+	}
+}
+
+func TestSaveRejectionPreservesExistingRunningGuest(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	connection := cli.NewMockConnection(ctrl)
+	domain := cli.NewMockVirDomain(ctrl)
+	manager := &LibvirtDomainManager{virConn: connection}
+	statePath := filepath.Join(t.TempDir(), "state.save")
+	if err := os.WriteFile(statePath+".partial", []byte("incomplete"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer"}}
+	connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+	domain.EXPECT().GetState().Return(libvirt.DOMAIN_RUNNING, 0, nil)
+	domain.EXPECT().Free().Return(nil)
+	if _, _, err := manager.saveVMI(vmi, statePath); hibernation.RejectionPhase(err) != hibernation.StateSaveRejected {
+		t.Fatalf("expected a non-destructive save rejection: %v", err)
+	}
+}
 
 func TestValidateHibernationStatePath(t *testing.T) {
 	expected := filepath.Join(hibernation.StateMountPath, "state.save")
@@ -116,11 +182,14 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 	}
 
 	committedMetadata := *metadata
+	vmi.Annotations[hibernation.ArtifactDigestAnnotation], err = hibernation.ArtifactDigest(committedMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
 	metadata.DomainXMLHash = hibernation.HashBytes([]byte("substituted-domain"))
 	if err := writeHibernationMetadata(statePath, metadata); err != nil {
 		t.Fatal(err)
 	}
-	connection.EXPECT().DomainSaveImageGetXMLDesc(statePath, libvirt.DomainSaveImageXMLFlags(0)).Return(committedDomainXML, nil)
 	if _, _, err := manager.restoreVMI(vmi, statePath, false); err == nil {
 		t.Fatal("restore accepted a substituted saved-domain definition")
 	}
@@ -188,6 +257,9 @@ func TestEjectTransientCloudInitMedia(t *testing.T) {
 }
 
 func TestCommitFailureBeforeConsumedMarkerIsTerminalAndUnconsumed(t *testing.T) {
+	if !hibernation.LabEnabled {
+		t.Skip("fault injection requires the hibernation_lab build tag")
+	}
 	ctrl := gomock.NewController(t)
 	connection := cli.NewMockConnection(ctrl)
 	domain := cli.NewMockVirDomain(ctrl)
@@ -209,7 +281,7 @@ func TestCommitFailureBeforeConsumedMarkerIsTerminalAndUnconsumed(t *testing.T) 
 	domain.EXPECT().GetState().Return(libvirt.DOMAIN_PAUSED, 0, nil)
 	domain.EXPECT().Free().Return(nil)
 
-	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || !strings.Contains(err.Error(), hibernation.StateRestoreCommitLost) {
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); hibernation.RejectionPhase(err) != hibernation.StateRestoreCommitLost {
 		t.Fatalf("expected terminal injected failure before consumption, got %v", err)
 	}
 	committed, err := readHibernationMetadata(statePath)
@@ -222,6 +294,9 @@ func TestCommitFailureBeforeConsumedMarkerIsTerminalAndUnconsumed(t *testing.T) 
 }
 
 func TestCommitFailureAfterConsumedMarkerCannotReplay(t *testing.T) {
+	if !hibernation.LabEnabled {
+		t.Skip("fault injection requires the hibernation_lab build tag")
+	}
 	ctrl := gomock.NewController(t)
 	connection := cli.NewMockConnection(ctrl)
 	domain := cli.NewMockVirDomain(ctrl)
@@ -243,7 +318,7 @@ func TestCommitFailureAfterConsumedMarkerCannotReplay(t *testing.T) {
 	domain.EXPECT().GetState().After(first).Return(libvirt.DOMAIN_PAUSED, 0, nil)
 	domain.EXPECT().Free().Return(nil)
 
-	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || !strings.Contains(err.Error(), hibernation.StateRestoreCommitLost) {
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); hibernation.RejectionPhase(err) != hibernation.StateRestoreCommitLost {
 		t.Fatalf("expected terminal injected failure after consumption, got %v", err)
 	}
 	committed, err := readHibernationMetadata(statePath)
@@ -258,7 +333,57 @@ func TestCommitFailureAfterConsumedMarkerCannotReplay(t *testing.T) {
 	second := connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
 	domain.EXPECT().GetState().After(second).Return(libvirt.DOMAIN_PAUSED, 0, nil)
 	domain.EXPECT().Free().Return(nil)
-	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || !strings.Contains(err.Error(), hibernation.StateRestoreCommitLost) {
+	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); hibernation.RejectionPhase(err) != hibernation.StateRestoreCommitLost {
 		t.Fatalf("consumed paused artifact was replayable: %v", err)
+	}
+}
+
+func TestHibernationRejectsCoherentArtifactTampering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.save")
+	original := hibernation.Metadata{Completed: true, AttemptID: "attempt", VMUID: "vm", StateSHA256: hibernation.HashBytes([]byte("original")), StateSize: 8}
+	digest, err := hibernation.ArtifactDigest(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.ArtifactDigestAnnotation: digest}}}
+	// An attacker can replace both the RAM image and its neighboring checksum.
+	// The controller's protected record still refers to the original save.
+	payload := []byte("replacement RAM")
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	original.StateSHA256 = hibernation.HashBytes(payload)
+	original.StateSize = int64(len(payload))
+	if err := writeHibernationMetadata(path, &original); err != nil {
+		t.Fatal(err)
+	}
+	manager := &LibvirtDomainManager{} // A rejection must occur before any libvirt call.
+	if _, _, err := manager.restoreVMI(vmi, path, false); hibernation.RejectionPhase(err) != hibernation.StateResumeRejected {
+		t.Fatalf("forged artifact accepted: %v", err)
+	}
+}
+
+func TestHibernationProductionBuildIgnoresFaultAnnotations(t *testing.T) {
+	if hibernation.LabEnabled {
+		t.Skip("production build assertion")
+	}
+	ctrl := gomock.NewController(t)
+	connection := cli.NewMockConnection(ctrl)
+	domain := cli.NewMockVirDomain(ctrl)
+	manager := &LibvirtDomainManager{virConn: connection}
+	path := filepath.Join(t.TempDir(), "state.save")
+	if err := writeHibernationMetadata(path, &hibernation.Metadata{AttemptID: "attempt"}); err != nil {
+		t.Fatal(err)
+	}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{
+		hibernation.AttemptAnnotation: "attempt", hibernation.LabFailBeforeConsumeAnnotation: "attempt", hibernation.LabFailAfterConsumeAnnotation: "attempt",
+	}}}
+	connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+	domain.EXPECT().GetState().Return(libvirt.DOMAIN_PAUSED, 0, nil)
+	domain.EXPECT().Resume().Return(nil)
+	domain.EXPECT().Free().Return(nil)
+	metadata, phase, err := manager.commitAndUnpauseVMI(vmi, path)
+	if err != nil || !metadata.Consumed || phase != hibernation.StateRunningAwaitingVerification {
+		t.Fatalf("lab annotations affected production operation: %s %v", phase, err)
 	}
 }

@@ -24,12 +24,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gomock "go.uber.org/mock/gomock"
 
 	"google.golang.org/grpc"
+	k8sv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 
 	"kubevirt.io/client-go/api"
@@ -39,6 +43,26 @@ import (
 	"kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/info"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 )
+
+func TestHibernateRPCDeadlineAllowsMemoryTransfer(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	cmd := cmdv1.NewMockCmdClient(ctrl)
+	client := newV1Client(cmd, nil)
+	vmi := &v1.VirtualMachineInstance{Spec: v1.VirtualMachineInstanceSpec{Domain: v1.DomainSpec{
+		Resources: v1.ResourceRequirements{Requests: k8sv1.ResourceList{k8sv1.ResourceMemory: resource.MustParse("32Gi")}},
+	}}}
+	cmd.EXPECT().HibernateVirtualMachine(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, request *cmdv1.HibernationRequest, _ ...grpc.CallOption) (*cmdv1.HibernationResponse, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) < 17*time.Minute || time.Until(deadline) > 18*time.Minute {
+				t.Fatalf("32 GiB save received an unsuitable deadline: %v", deadline)
+			}
+			return &cmdv1.HibernationResponse{Response: &cmdv1.Response{Success: true}}, nil
+		})
+	if _, err := client.HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_SAVE, "/state", false); err != nil {
+		t.Fatal(err)
+	}
+}
 
 var _ = Describe("Virt remote commands", func() {
 

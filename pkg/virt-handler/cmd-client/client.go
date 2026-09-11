@@ -353,7 +353,7 @@ func (c *VirtLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInsta
 		StatePath:           statePath,
 		AllowKernelMismatch: allowKernelMismatch,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), extendedTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), hibernationTimeout(vmi))
 	defer cancel()
 	response, err := c.v1client.HibernateVirtualMachine(ctx, request)
 	var genericResponse *cmdv1.Response
@@ -364,6 +364,29 @@ func (c *VirtLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInsta
 		return response, err
 	}
 	return response, nil
+}
+
+func hibernationTimeout(vmi *v1.VirtualMachineInstance) time.Duration {
+	// Save and restore transfer guest RAM and verify the complete artifact.
+	// The ordinary 60-second RPC deadline is insufficient for large guests.
+	memory := vmi.Spec.Domain.Resources.Requests.Memory().Value()
+	if vmi.Spec.Domain.Memory != nil && vmi.Spec.Domain.Memory.Guest != nil && vmi.Spec.Domain.Memory.Guest.Value() > memory {
+		memory = vmi.Spec.Domain.Memory.Guest.Value()
+	}
+	const gib = int64(1 << 30)
+	guestGiB := memory / gib
+	if memory%gib != 0 {
+		guestGiB++
+	}
+	// Bound worker occupancy even for an invalid or extremely large request.
+	if guestGiB > 116 {
+		return time.Hour
+	}
+	timeout := 2*time.Minute + time.Duration(guestGiB)*30*time.Second
+	if timeout < 5*time.Minute {
+		return 5 * time.Minute
+	}
+	return timeout
 }
 
 func (c *VirtLauncherClient) FreezeVirtualMachine(vmi *v1.VirtualMachineInstance, unfreezeTimeoutSeconds int32) error {

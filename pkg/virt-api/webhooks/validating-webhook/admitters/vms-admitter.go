@@ -24,6 +24,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	admissionv1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -100,6 +102,27 @@ func (admitter *VMsAdmitter) Admit(ctx context.Context, ar *admissionv1.Admissio
 	err := json.Unmarshal(raw, &vm)
 	if err != nil {
 		return webhookutils.ToAdmissionResponseError(err)
+	}
+	_, trustedHibernationWriter := admitter.KubeVirtServiceAccounts[ar.Request.UserInfo.Username]
+	oldVM := &v1.VirtualMachine{}
+	if ar.Request.Operation == admissionv1.Update {
+		if err := json.Unmarshal(ar.Request.OldObject.Raw, oldVM); err != nil {
+			return webhookutils.ToAdmissionResponseError(err)
+		}
+	}
+	if !trustedHibernationWriter && hibernation.ControlChanged(oldVM.Annotations, vm.Annotations, !hibernation.Active(oldVM.Annotations)) {
+		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueNotSupported,
+			Message: "use the hibernate, resume, and finalizehibernation subresources to manage hibernation",
+			Field:   "metadata.annotations",
+		}})
+	}
+	if hibernation.Active(oldVM.Annotations) && !equality.Semantic.DeepEqual(oldVM.Spec, vm.Spec) {
+		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
+			Type:    metav1.CauseTypeFieldValueNotSupported,
+			Message: "VM specification is immutable while a hibernation attempt is active",
+			Field:   "spec",
+		}})
 	}
 
 	// If the VirtualMachine is being deleted return early and avoid racing any other in-flight resource deletions that might be happening

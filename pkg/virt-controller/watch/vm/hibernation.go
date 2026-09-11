@@ -94,7 +94,22 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 			return updated, vmi, true, err
 		}
 		vmiState, vmiMessage := vmiHibernationOutcome(vmi)
+		if vmiState == hibernation.StateSaveRejected {
+			// The launcher rejected the request before changing the running
+			// domain. Preserve that guest; a failed save is not a stop request.
+			updatedVMI, err := c.setVMIHibernationRequest(vmi, "", hibernation.StateRunning)
+			if err != nil {
+				return vm, vmi, true, err
+			}
+			updatedVM, err := c.updateVMHibernation(vm, hibernation.StateRunning, "", "", vmiMessage)
+			return updatedVM, updatedVMI, true, err
+		}
 		if vmiState == hibernation.StateHibernated {
+			digest := vmi.Annotations[hibernation.ArtifactDigestAnnotation]
+			if digest == "" {
+				return vm, vmi, true, fmt.Errorf("completed save is missing its launcher-reported artifact digest")
+			}
+			vm.Annotations[hibernation.ArtifactDigestAnnotation] = digest
 			updated, err := c.updateVMHibernation(vm, hibernation.StateHibernated, "", "", "")
 			return updated, vmi, true, err
 		}
@@ -119,7 +134,7 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 			return vm, vmi, true, fmt.Errorf("cannot hibernate a VM without a VMI")
 		}
 		if vmi.Annotations[hibernation.StatePVCAnnotation] != vm.Annotations[hibernation.StatePVCAnnotation] {
-			return vm, vmi, true, fmt.Errorf("state PVC was not mounted before launcher creation; restart the disposable lab VM after setting %s", hibernation.StatePVCAnnotation)
+			return vm, vmi, true, fmt.Errorf("state PVC was not mounted before launcher creation; a newly created launcher must include %s", hibernation.StatePVCAnnotation)
 		}
 		attempt := string(uuid.NewUUID())
 		pvcIdentities, err := c.hibernationPVCIdentities(vm)
@@ -132,6 +147,7 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 		}
 		vm.Annotations[hibernation.PVCIdentitiesAnnotation] = string(pvcPayload)
 		vm.Annotations[hibernation.VMUIDAnnotation] = string(vm.UID)
+		delete(vm.Annotations, hibernation.ArtifactDigestAnnotation)
 		updatedVM, err := c.updateVMHibernation(vm, hibernation.StateSaving, request, attempt, "")
 		if err != nil {
 			return vm, vmi, true, err
@@ -180,6 +196,15 @@ func (c *Controller) reconcileResume(vm *virtv1.VirtualMachine, vmi *virtv1.Virt
 			return vm, vmi, true, err
 		}
 		if shouldFinalizeHibernation(request) {
+			ready := false
+			for _, condition := range vmi.Status.Conditions {
+				if condition.Type == virtv1.VirtualMachineInstanceReady && condition.Status == k8score.ConditionTrue {
+					ready = true
+				}
+			}
+			if !vmi.IsRunning() || !ready {
+				return updatedVM, vmi, true, fmt.Errorf("finalization requires a running, Ready VMI")
+			}
 			updatedVMI, err := c.setVMIHibernationRequest(vmi, hibernation.RequestErase, hibernation.StateRunningAwaitingVerification)
 			return updatedVM, updatedVMI, true, err
 		}
@@ -231,6 +256,9 @@ func (c *Controller) updateVMIHibernation(vmi *virtv1.VirtualMachineInstance, re
 		return vmi, err
 	}
 	copy.Annotations[hibernation.PVCIdentitiesAnnotation] = string(payload)
+	if request == hibernation.RequestSave {
+		delete(copy.Annotations, hibernation.ArtifactDigestAnnotation)
+	}
 	return c.clientset.VirtualMachineInstance(copy.Namespace).Update(context.Background(), copy, metav1.UpdateOptions{})
 }
 
