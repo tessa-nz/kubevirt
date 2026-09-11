@@ -21,7 +21,13 @@ package admitters
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfield "k8s.io/apimachinery/pkg/util/validation/field"
+	poolv1 "kubevirt.io/api/pool/v1beta1"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	authv1 "k8s.io/api/authentication/v1"
@@ -110,6 +116,67 @@ func TestHibernationAdmissionProtectsVMIControl(t *testing.T) {
 			if result.Allowed != tc.allowed {
 				t.Fatalf("allowed=%v want %v: %+v", result.Allowed, tc.allowed, result.Result)
 			}
+		})
+	}
+}
+
+func TestHibernationDeletionRequiresCompletedAttempt(t *testing.T) {
+	config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{})
+	for _, active := range []bool{false, true} {
+		for _, trusted := range []bool{false, true} {
+			for _, kind := range []string{"vm", "vmi"} {
+				t.Run(fmt.Sprintf("%s/active=%v/trusted=%v", kind, active, trusted), func(t *testing.T) {
+					old := metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}}}
+					if active {
+						old.Annotations[hibernation.StateAnnotation] = hibernation.StateHibernated
+					}
+					raw, err := json.Marshal(old)
+					if err != nil {
+						t.Fatal(err)
+					}
+					username := "editor"
+					if trusted {
+						username = "system:serviceaccount:kubevirt:kubevirt-controller"
+					}
+					accounts := webhooks.KubeVirtServiceAccounts("kubevirt")
+					ar := &admissionv1.AdmissionReview{Request: &admissionv1.AdmissionRequest{Operation: admissionv1.Delete, UserInfo: authv1.UserInfo{Username: username}, OldObject: runtime.RawExtension{Raw: raw}}}
+					var response *admissionv1.AdmissionResponse
+					if kind == "vm" {
+						ar.Request.Resource = webhooks.VirtualMachineGroupVersionResource
+						response = (&VMsAdmitter{KubeVirtServiceAccounts: accounts}).Admit(context.Background(), ar)
+					} else {
+						ar.Request.Resource = webhooks.VirtualMachineInstanceGroupVersionResource
+						response = NewVMIUpdateAdmitter(config, accounts).Admit(context.Background(), ar)
+					}
+					if response.Allowed != (!active || trusted) {
+						t.Fatalf("unexpected delete response: %+v", response)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestHibernationParentTemplatesCannotForgeControl(t *testing.T) {
+	config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{})
+	for _, kind := range []string{"pool", "replicaset"} {
+		t.Run(kind, func(t *testing.T) {
+			template := &v1.VirtualMachineInstanceTemplateSpec{Spec: api.NewMinimalVMI("test").Spec}
+			annotations := map[string]string{hibernation.RequestAnnotation: hibernation.RequestHibernate}
+			var causes []metav1.StatusCause
+			if kind == "pool" {
+				pool := &poolv1.VirtualMachinePool{Spec: poolv1.VirtualMachinePoolSpec{VirtualMachineTemplate: &poolv1.VirtualMachineTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: annotations}, Spec: v1.VirtualMachineSpec{Running: pointer.P(false), Template: template}}}}
+				causes = ValidateVMPoolSpec(&admissionv1.AdmissionReview{Request: &admissionv1.AdmissionRequest{Operation: admissionv1.Create}}, k8sfield.NewPath("spec"), pool, config, false)
+			} else {
+				template.ObjectMeta.Annotations = annotations
+				causes = ValidateVMIRSSpec(k8sfield.NewPath("spec"), &v1.VirtualMachineInstanceReplicaSetSpec{Template: template}, config)
+			}
+			for _, cause := range causes {
+				if strings.Contains(cause.Message, "hibernation control") {
+					return
+				}
+			}
+			t.Fatalf("parent template control was accepted: %+v", causes)
 		})
 	}
 }

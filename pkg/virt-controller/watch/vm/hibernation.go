@@ -93,6 +93,15 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 			updated, err := c.updateVMHibernation(vm, hibernation.StateSaveIncomplete, "", "", "launcher disappeared before save completion")
 			return updated, vmi, true, err
 		}
+		if vmi.Annotations[hibernation.AttemptAnnotation] != vm.Annotations[hibernation.AttemptAnnotation] ||
+			(vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateSaving && needsSaveDispatch(vm, vmi)) {
+			pvcIdentities := map[string]string{}
+			if err := json.Unmarshal([]byte(vm.Annotations[hibernation.PVCIdentitiesAnnotation]), &pvcIdentities); err != nil {
+				return vm, vmi, true, fmt.Errorf("invalid persisted PVC identities: %w", err)
+			}
+			updatedVMI, err := c.updateVMIHibernation(vmi, hibernation.RequestSave, hibernation.StateSaving, vm.Annotations[hibernation.AttemptAnnotation], vm, pvcIdentities)
+			return vm, updatedVMI, true, err
+		}
 		vmiState, vmiMessage := vmiHibernationOutcome(vmi)
 		if vmiState == hibernation.StateSaveRejected {
 			// The launcher rejected the request before changing the running
@@ -117,14 +126,7 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 			updated, err := c.updateVMHibernation(vm, vmiState, "", "", vmiMessage)
 			return updated, vmi, true, err
 		}
-		if needsSaveDispatch(vm, vmi) {
-			pvcIdentities := map[string]string{}
-			if err := json.Unmarshal([]byte(vm.Annotations[hibernation.PVCIdentitiesAnnotation]), &pvcIdentities); err != nil {
-				return vm, vmi, true, fmt.Errorf("invalid persisted PVC identities: %w", err)
-			}
-			updatedVMI, err := c.updateVMIHibernation(vmi, hibernation.RequestSave, hibernation.StateSaving, vm.Annotations[hibernation.AttemptAnnotation], vm, pvcIdentities)
-			return vm, updatedVMI, true, err
-		}
+
 		return vm, vmi, true, nil
 	case "", hibernation.StateRunning:
 		if request == "" {
@@ -258,6 +260,13 @@ func (c *Controller) updateVMIHibernation(vmi *virtv1.VirtualMachineInstance, re
 	copy.Annotations[hibernation.PVCIdentitiesAnnotation] = string(payload)
 	if request == hibernation.RequestSave {
 		delete(copy.Annotations, hibernation.ArtifactDigestAnnotation)
+		conditions := copy.Status.Conditions[:0]
+		for _, condition := range copy.Status.Conditions {
+			if condition.Type != virtv1.VirtualMachineInstanceConditionType(hibernation.VMIConditionType) {
+				conditions = append(conditions, condition)
+			}
+		}
+		copy.Status.Conditions = conditions
 	}
 	return c.clientset.VirtualMachineInstance(copy.Namespace).Update(context.Background(), copy, metav1.UpdateOptions{})
 }
@@ -330,7 +339,8 @@ func setOrDelete(values map[string]string, key, value string) {
 
 func vmiHibernationOutcome(vmi *virtv1.VirtualMachineInstance) (string, string) {
 	for _, condition := range vmi.Status.Conditions {
-		if condition.Type == virtv1.VirtualMachineInstanceConditionType(hibernation.VMIConditionType) {
+		if condition.Type == virtv1.VirtualMachineInstanceConditionType(hibernation.VMIConditionType) &&
+			condition.Reason == vmi.Annotations[hibernation.StateAnnotation] {
 			return condition.Reason, condition.Message
 		}
 	}

@@ -404,6 +404,12 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+- apiGroups:
   - ""
   resources:
   - pods
@@ -1089,6 +1095,9 @@ rules:
   - virtualmachines/addvolume
   - virtualmachines/removevolume
   - virtualmachines/memorydump
+  - virtualmachines/hibernate
+  - virtualmachines/resume
+  - virtualmachines/finalizehibernation
   - virtualmachines/evacuate/cancel
   verbs:
   - update

@@ -24,6 +24,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -86,6 +88,13 @@ func ValidateVMIRSSpec(field *k8sfield.Path, spec *v1.VirtualMachineInstanceRepl
 			Type:    metav1.CauseTypeFieldValueRequired,
 			Message: fmt.Sprintf("missing virtual machine template."),
 			Field:   field.Child("template").String(),
+		})
+	}
+	if hibernation.ControlChanged(nil, spec.Template.ObjectMeta.Annotations, false) {
+		causes = append(causes, metav1.StatusCause{
+			Type:    metav1.CauseTypeFieldValueNotSupported,
+			Message: "hibernation control is supported only on independently managed VirtualMachines",
+			Field:   field.Child("template", "metadata", "annotations").String(),
 		})
 	}
 	causes = append(causes, validateGraceIOVirtualizationAnnotations(field.Child("template", "metadata"), &spec.Template.Spec, spec.Template.ObjectMeta.Annotations, config)...)

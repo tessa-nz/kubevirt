@@ -387,3 +387,21 @@ func TestHibernationProductionBuildIgnoresFaultAnnotations(t *testing.T) {
 		t.Fatalf("lab annotations affected production operation: %s %v", phase, err)
 	}
 }
+
+func TestHibernationBlocksLauncherLifecycleMutation(t *testing.T) {
+	manager := &LibvirtDomainManager{} // No libvirt call is permitted.
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateRestoredPaused}}}
+	for _, operation := range []struct {
+		name string
+		run  func(*v1.VirtualMachineInstance) error
+	}{{"pause", manager.PauseVMI}, {"unpause", manager.UnpauseVMI}, {"reset", manager.ResetVMI}, {"softreboot", manager.SoftRebootVMI}, {"unfreeze", manager.UnfreezeVMI}} {
+		t.Run(operation.name, func(t *testing.T) {
+			if err := operation.run(vmi); err == nil {
+				t.Fatal("active attempt allowed unrelated lifecycle mutation")
+			}
+		})
+	}
+	if err := manager.FreezeVMI(vmi, 30); err == nil {
+		t.Fatal("active attempt allowed freeze")
+	}
+}

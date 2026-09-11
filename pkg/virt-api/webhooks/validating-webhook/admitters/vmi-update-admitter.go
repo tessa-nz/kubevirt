@@ -52,6 +52,9 @@ func NewVMIUpdateAdmitter(config *virtconfig.ClusterConfig, kubeVirtServiceAccou
 }
 
 func (admitter *VMIUpdateAdmitter) Admit(_ context.Context, ar *admissionv1.AdmissionReview) *admissionv1.AdmissionResponse {
+	if ar.Request.Operation == admissionv1.Delete {
+		return admitHibernationDelete(ar, admitter.kubeVirtServiceAccounts)
+	}
 	if resp := webhookutils.ValidateSchema(v1.VirtualMachineInstanceGroupVersionKind, ar.Request.Object.Raw); resp != nil {
 		return resp
 	}

@@ -692,3 +692,16 @@ func stableCPUFingerprint(cpuInfo string) string {
 	}
 	return stable.String()
 }
+
+// Called under domainModifyLock, also catching an RPC queued before the VMI
+// received its hibernation annotations. A successful save keeps this marker
+// until source-pod deletion; the restored VMI starts with protected annotations.
+func rejectHibernationMutation(vmi *v1.VirtualMachineInstance) error {
+	if hibernation.Active(vmi.Annotations) {
+		return fmt.Errorf("lifecycle operation conflicts with an active hibernation attempt")
+	}
+	if _, err := os.Stat(hibernation.SaveInProgressPath); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("lifecycle operation blocked while the save marker exists or cannot be checked")
+	}
+	return nil
+}

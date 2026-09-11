@@ -1990,6 +1990,9 @@ func (l *LibvirtDomainManager) MemoryDump(vmi *v1.VirtualMachineInstance, dumpPa
 func (l *LibvirtDomainManager) PauseVMI(vmi *v1.VirtualMachineInstance) error {
 	l.domainModifyLock.Lock()
 	defer l.domainModifyLock.Unlock()
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return err
+	}
 
 	logger := log.Log.Object(vmi)
 
@@ -2030,6 +2033,9 @@ func (l *LibvirtDomainManager) PauseVMI(vmi *v1.VirtualMachineInstance) error {
 func (l *LibvirtDomainManager) UnpauseVMI(vmi *v1.VirtualMachineInstance) error {
 	l.domainModifyLock.Lock()
 	defer l.domainModifyLock.Unlock()
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return err
+	}
 
 	logger := log.Log.Object(vmi)
 
@@ -2071,14 +2077,32 @@ func (l *LibvirtDomainManager) UnpauseVMI(vmi *v1.VirtualMachineInstance) error 
 }
 
 func (l *LibvirtDomainManager) FreezeVMI(vmi *v1.VirtualMachineInstance, unfreezeTimeoutSeconds int32) error {
+	l.domainModifyLock.Lock()
+	defer l.domainModifyLock.Unlock()
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return err
+	}
+
 	return l.storageManager.FreezeVMI(vmi, unfreezeTimeoutSeconds)
 }
 
 func (l *LibvirtDomainManager) UnfreezeVMI(vmi *v1.VirtualMachineInstance) error {
+	l.domainModifyLock.Lock()
+	defer l.domainModifyLock.Unlock()
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return err
+	}
+
 	return l.storageManager.UnfreezeVMI(vmi)
 }
 
 func (l *LibvirtDomainManager) ResetVMI(vmi *v1.VirtualMachineInstance) error {
+	l.domainModifyLock.Lock()
+	defer l.domainModifyLock.Unlock()
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return err
+	}
+
 	domName := api.VMINamespaceKeyFunc(vmi)
 	dom, err := l.virConn.LookupDomainByName(domName)
 	if err != nil {
@@ -2096,6 +2120,12 @@ func (l *LibvirtDomainManager) ResetVMI(vmi *v1.VirtualMachineInstance) error {
 }
 
 func (l *LibvirtDomainManager) SoftRebootVMI(vmi *v1.VirtualMachineInstance) error {
+	l.domainModifyLock.Lock()
+	defer l.domainModifyLock.Unlock()
+	if err := rejectHibernationMutation(vmi); err != nil {
+		return err
+	}
+
 	domainRebootFlagValues := libvirt.DOMAIN_REBOOT_GUEST_AGENT
 	condManager := controller.NewVirtualMachineInstanceConditionManager()
 	if !condManager.HasConditionWithStatus(vmi, v1.VirtualMachineInstanceAgentConnected, k8sv1.ConditionTrue) {

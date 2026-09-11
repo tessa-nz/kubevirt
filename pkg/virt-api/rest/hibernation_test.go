@@ -124,3 +124,33 @@ func TestHibernationPublicRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestHibernationBlocksOrdinaryLifecycleRequest(t *testing.T) {
+	for _, operation := range []string{"pause", "unpause", "reset", "softreboot"} {
+		t.Run(operation, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := kubecli.NewMockKubevirtClient(ctrl)
+			vmiClient := kubecli.NewMockVirtualMachineInstanceInterface(ctrl)
+			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "test", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateRestoredPaused}}}
+			client.EXPECT().VirtualMachineInstance("default").Return(vmiClient)
+			vmiClient.EXPECT().Get(gomock.Any(), "test", gomock.Any()).Return(vmi, nil)
+			if operation == "unpause" {
+				vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+				client.EXPECT().VirtualMachine("default").Return(vmClient)
+				vmClient.EXPECT().Get(gomock.Any(), "test", gomock.Any()).Return(nil, apierrors.NewNotFound(v1.Resource("virtualmachine"), "test"))
+			}
+			app := &SubresourceAPIApp{virtCli: client}
+			ws := new(restful.WebService).Path("/namespaces/{namespace}/virtualmachineinstances/{name}")
+			handlers := map[string]restful.RouteFunction{"pause": app.PauseVMIRequestHandler, "unpause": app.UnpauseVMIRequestHandler, "reset": app.ResetVMIRequestHandler, "softreboot": app.SoftRebootVMIRequestHandler}
+			ws.Route(ws.PUT("/" + operation).To(handlers[operation]))
+			container := restful.NewContainer()
+			container.Add(ws)
+			resp := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPut, "/namespaces/default/virtualmachineinstances/test/"+operation, nil)
+			container.ServeHTTP(resp, req)
+			if resp.Code != http.StatusConflict || !strings.Contains(resp.Body.String(), "hibernation") {
+				t.Fatalf("ordinary %s passed the active attempt: %d %s", operation, resp.Code, resp.Body.String())
+			}
+		})
+	}
+}

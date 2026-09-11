@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	admissionv1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -117,6 +119,13 @@ func ValidateVMPoolSpec(ar *admissionv1.AdmissionReview, field *k8sfield.Path, p
 		})
 	}
 
+	if hibernation.ControlChanged(nil, spec.VirtualMachineTemplate.ObjectMeta.Annotations, false) {
+		causes = append(causes, metav1.StatusCause{
+			Type:    metav1.CauseTypeFieldValueNotSupported,
+			Message: "hibernation control is supported only on independently managed VirtualMachines",
+			Field:   field.Child("virtualMachineTemplate", "metadata", "annotations").String(),
+		})
+	}
 	causes = append(causes, ValidateVirtualMachineSpec(field.Child("virtualMachineTemplate", "spec"), &spec.VirtualMachineTemplate.Spec, config, isKubeVirtServiceAccount)...)
 
 	selector, err := metav1.LabelSelectorAsSelector(spec.Selector)

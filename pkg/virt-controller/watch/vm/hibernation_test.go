@@ -114,10 +114,10 @@ func TestRestoreRefreshesCurrentPVCIdentityBeforeLauncherCreation(t *testing.T) 
 	}
 }
 
-func TestHibernationOutcomeUsesPersistedHandlerCondition(t *testing.T) {
+func TestHibernationOutcomeUsesMatchingHandlerCondition(t *testing.T) {
 	vmi := &v1.VirtualMachineInstance{
 		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-			hibernation.StateAnnotation: hibernation.StateSaving,
+			hibernation.StateAnnotation: hibernation.StateHibernated,
 		}},
 		Status: v1.VirtualMachineInstanceStatus{Conditions: []v1.VirtualMachineInstanceCondition{{
 			Type:    v1.VirtualMachineInstanceConditionType(hibernation.VMIConditionType),
@@ -218,5 +218,29 @@ func TestHibernationSaveRejectionKeepsRunningVMI(t *testing.T) {
 	_, _, _, err := controller.reconcileHibernation(vm, vmi)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHibernationIgnoresPriorAttemptOutcome(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := kubecli.NewMockKubevirtClient(ctrl)
+	vmiClient := kubecli.NewMockVirtualMachineInstanceInterface(ctrl)
+	controller := &Controller{clientset: client}
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaving, hibernation.AttemptAnnotation: "new", hibernation.PVCIdentitiesAnnotation: `{}`}}}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaveRejected, hibernation.AttemptAnnotation: "old"}}, Status: v1.VirtualMachineInstanceStatus{Conditions: []v1.VirtualMachineInstanceCondition{{Type: v1.VirtualMachineInstanceConditionType(hibernation.VMIConditionType), Reason: hibernation.StateSaveRejected}}}}
+	client.EXPECT().VirtualMachineInstance("default").Return(vmiClient)
+	vmiClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachineInstance, _ metav1.UpdateOptions) (*v1.VirtualMachineInstance, error) {
+		if updated.Annotations[hibernation.AttemptAnnotation] != "new" || updated.Annotations[hibernation.RequestAnnotation] != hibernation.RequestSave || len(updated.Status.Conditions) != 0 {
+			t.Fatalf("old outcome survived new dispatch: %+v", updated)
+		}
+		return updated, nil
+	})
+	_, _, _, err := controller.reconcileHibernation(vm, vmi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vmi.Annotations[hibernation.StateAnnotation] = hibernation.StateSaving
+	if state, _ := vmiHibernationOutcome(vmi); state != hibernation.StateSaving {
+		t.Fatalf("old condition superseded new state: %s", state)
 	}
 }

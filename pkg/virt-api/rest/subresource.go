@@ -161,7 +161,13 @@ func (app *SubresourceAPIApp) putRequestHandlerWithErrorPostProcessing(request *
 		errorPostProcessing = func(vmi *v1.VirtualMachineInstance, err error) error { return err }
 	}
 
-	vmi, url, conn, statusErr := app.prepareConnection(request, preValidate, getVirtHandlerURL)
+	validate := func(vmi *v1.VirtualMachineInstance) *errors.StatusError {
+		if err := app.rejectConflictingHibernation(vmi); err != nil {
+			return err
+		}
+		return preValidate(vmi)
+	}
+	vmi, url, conn, statusErr := app.prepareConnection(request, validate, getVirtHandlerURL)
 	if statusErr != nil {
 		err := errorPostProcessing(vmi, fmt.Errorf("%s", statusErr.ErrStatus.Message))
 		statusErr.ErrStatus.Message = err.Error()

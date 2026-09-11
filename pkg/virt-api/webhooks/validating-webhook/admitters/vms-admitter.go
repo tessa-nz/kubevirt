@@ -92,6 +92,9 @@ func (admitter *VMsAdmitter) Admit(ctx context.Context, ar *admissionv1.Admissio
 		return webhookutils.ToAdmissionResponseError(err)
 	}
 
+	if ar.Request.Operation == admissionv1.Delete {
+		return admitHibernationDelete(ar, admitter.KubeVirtServiceAccounts)
+	}
 	if resp := webhookutils.ValidateSchema(v1.VirtualMachineGroupVersionKind, ar.Request.Object.Raw); resp != nil {
 		return resp
 	}

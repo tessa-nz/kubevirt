@@ -26,6 +26,7 @@ import (
 	"github.com/emicklei/go-restful/v3"
 	k8sv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "kubevirt.io/api/core/v1"
@@ -117,6 +118,9 @@ func validateHibernationRequest(vm *v1.VirtualMachine, vmi *v1.VirtualMachineIns
 	}
 	switch operation {
 	case hibernation.RequestHibernate:
+		if metav1.GetControllerOf(vm) != nil {
+			return fmt.Errorf("hibernation requires an independently managed VM")
+		}
 		if state != "" && state != hibernation.StateRunning && !(state == hibernation.StateSaving && request == operation) {
 			return fmt.Errorf("cannot hibernate from state %q", state)
 		}
@@ -188,8 +192,30 @@ func (app *SubresourceAPIApp) validateHibernationStorage(ctx context.Context, vm
 	if vmi.Spec.Domain.Memory != nil && vmi.Spec.Domain.Memory.Guest != nil && vmi.Spec.Domain.Memory.Guest.Value() > memory {
 		memory = vmi.Spec.Domain.Memory.Guest.Value()
 	}
-	if pvc.Status.Capacity.Storage().Value() < memory+memory/10+(1<<30) {
+	required := resource.NewQuantity(memory, resource.BinarySI)
+	required.Add(*resource.NewQuantity(memory/10, resource.BinarySI))
+	required.Add(*resource.NewQuantity(1<<30, resource.BinarySI))
+	if pvc.Status.Capacity.Storage().Cmp(*required) < 0 {
 		return errors.NewConflict(v1.Resource("persistentvolumeclaim"), name, fmt.Errorf("state PVC must hold guest RAM plus 10 percent and 1 GiB overhead"))
+	}
+	return nil
+}
+
+func (app *SubresourceAPIApp) rejectConflictingHibernation(vmi *v1.VirtualMachineInstance) *errors.StatusError {
+	active := hibernation.Active(vmi.Annotations)
+	// Read the VM when this launcher supports state storage, closing the window
+	// between accepting a VM request and dispatching it to the VMI.
+	if !active && vmi.Annotations[hibernation.StatePVCAnnotation] != "" {
+		vm, err := app.fetchVirtualMachine(vmi.Name, vmi.Namespace)
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+		if err == nil {
+			active = hibernation.Active(vm.Annotations)
+		}
+	}
+	if active {
+		return errors.NewConflict(v1.Resource("virtualmachineinstance"), vmi.Name, fmt.Errorf("lifecycle operation conflicts with an active hibernation attempt"))
 	}
 	return nil
 }
