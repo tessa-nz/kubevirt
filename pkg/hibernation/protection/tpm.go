@@ -47,7 +47,7 @@ type TPMStore struct {
 	open      func() (transport.TPMCloser, error)
 	lockPath  string
 	ownerAuth []byte
-	mu        sync.Mutex
+	lock      sync.Mutex
 }
 
 // NewTPMStore supports an injected transport for emulator tests. Production uses
@@ -81,8 +81,8 @@ func (s *TPMStore) transaction(attempt Attempt, run func(*tpmAttempt) error) err
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.lockPath), 0700); err != nil {
 		return err
 	}

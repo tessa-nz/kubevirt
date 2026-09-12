@@ -6,6 +6,7 @@ go_library(
         "control.go",
         "errors.go",
         "lab_disabled.go",
+        "lab_enabled.go",  # keep: opt-in hibernation_lab build
         "reservation.go",
         "sizing.go",
         "types.go",

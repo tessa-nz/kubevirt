@@ -39,14 +39,14 @@ import (
 // These tests use only Microsoft's in-process TPM emulator. They never open
 // /dev/tpm*, issue TPM_Clear to a device, or create hardware persistent objects.
 type emulatorTransport struct {
-	mu   sync.Mutex
+	lock sync.Mutex
 	t    transport.TPM
 	drop tpm2.TPMCC
 }
 
 func (e *emulatorTransport) Send(command []byte) ([]byte, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.lock.Lock()
+	defer e.lock.Unlock()
 	rsp, err := e.t.Send(command)
 	if err == nil && e.drop != 0 && tpm2.TPMCC(binary.BigEndian.Uint32(command[6:10])) == e.drop {
 		e.drop = 0

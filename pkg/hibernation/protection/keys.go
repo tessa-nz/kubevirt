@@ -73,14 +73,3 @@ func (k *PrivateKey) Close() {
 	clear(k.Identity)
 	k.Identity = nil
 }
-
-// KeyStore is implemented by the node TPM. Create never exports a private key;
-// Open is unavailable after Consume. Destroy requires prior consumption, while
-// Abandon is reserved for a proven save rejection with the original guest live.
-type KeyStore interface {
-	Create(Attempt) (PublicKey, error)
-	Open(Attempt) (*PrivateKey, error)
-	Consume(Attempt) (bool, error)
-	Destroy(Attempt) error
-	Abandon(Attempt) error
-}

@@ -106,7 +106,7 @@ type downwardMetricsManager interface {
 }
 
 type VirtualMachineController struct {
-	hibernationKeys protection.KeyStore
+	hibernationKeys hibernationKeyStore
 	*BaseController
 	capabilities             *libvirtxml.Caps
 	clientset                kubecli.KubevirtClient

@@ -32,6 +32,17 @@ import (
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 )
 
+// hibernationKeyStore is implemented by the node TPM. Create never exports a
+// private key; Open is unavailable after Consume. Destroy requires consumption,
+// while Abandon is reserved for a proven save rejection with the guest live.
+type hibernationKeyStore interface {
+	Create(protection.Attempt) (protection.PublicKey, error)
+	Open(protection.Attempt) (*protection.PrivateKey, error)
+	Consume(protection.Attempt) (bool, error)
+	Destroy(protection.Attempt) error
+	Abandon(protection.Attempt) error
+}
+
 func hibernationAttempt(vmi *v1.VirtualMachineInstance) protection.Attempt {
 	return protection.Attempt{VMUID: vmi.Annotations[hibernation.VMUIDAnnotation], ID: vmi.Annotations[hibernation.AttemptAnnotation]}
 }
