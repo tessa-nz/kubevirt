@@ -46,6 +46,8 @@ import (
 	containerdisk "kubevirt.io/kubevirt/pkg/container-disk"
 	"kubevirt.io/kubevirt/pkg/downwardmetrics"
 	ephemeraldisk "kubevirt.io/kubevirt/pkg/ephemeral-disk"
+	"kubevirt.io/kubevirt/pkg/hibernation"
+	"kubevirt.io/kubevirt/pkg/hibernation/protection"
 	"kubevirt.io/kubevirt/pkg/hooks"
 	hotplugdisk "kubevirt.io/kubevirt/pkg/hotplug-disk"
 	"kubevirt.io/kubevirt/pkg/ignition"
@@ -345,6 +347,7 @@ func waitForFinalNotify(deleteNotificationSent chan watch.Event,
 }
 
 func main() {
+	hibernationProtected := pflag.Bool("hibernation-state-protection", false, "Require unswappable memory before accepting hibernation keys")
 	qemuTimeout := pflag.Duration("qemu-timeout", defaultStartTimeout, "Amount of time to wait for qemu")
 	virtShareDir := pflag.String("kubevirt-share-dir", "/var/run/kubevirt", "Shared directory between virt-handler and virt-launcher")
 	ephemeralDiskDir := pflag.String("ephemeral-disk-dir", "/var/run/kubevirt-ephemeral-disks", "Base directory for ephemeral disk data")
@@ -377,6 +380,14 @@ func main() {
 
 	pflag.CommandLine.AddGoFlag(goflag.CommandLine.Lookup("v"))
 	pflag.Parse()
+	if *hibernationProtected {
+		if err := protection.RequireProtectedMemory(); err != nil {
+			panic(err)
+		}
+		if err := protection.RequireMemoryFilesystem(hibernation.StagingMountPath); err != nil {
+			panic(err)
+		}
+	}
 
 	log.InitializeLogging("virt-launcher")
 

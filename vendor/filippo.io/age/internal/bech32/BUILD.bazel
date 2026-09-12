@@ -1,0 +1,9 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["bech32.go"],
+    importmap = "kubevirt.io/kubevirt/vendor/filippo.io/age/internal/bech32",
+    importpath = "filippo.io/age/internal/bech32",
+    visibility = ["//vendor/filippo.io/age:__subpackages__"],
+)

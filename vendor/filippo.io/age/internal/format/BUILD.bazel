@@ -1,0 +1,9 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["format.go"],
+    importmap = "kubevirt.io/kubevirt/vendor/filippo.io/age/internal/format",
+    importpath = "filippo.io/age/internal/format",
+    visibility = ["//vendor/filippo.io/age:__subpackages__"],
+)

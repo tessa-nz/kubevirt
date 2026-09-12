@@ -312,7 +312,7 @@ func (l *Launcher) HibernateVirtualMachine(_ context.Context, request *cmdv1.Hib
 		response.Response = vmiResponse
 		return response, nil
 	}
-	result, err := l.domainManager.HibernateVMI(vmi, request.Action, request.StatePath, request.AllowKernelMismatch)
+	result, err := l.domainManager.HibernateVMI(vmi, request.Action, request.StatePath, request.AllowKernelMismatch, request.Protection)
 	if err != nil {
 		log.Log.Object(vmi).Reason(err).Error("hibernation action failed")
 		response.Response.Success = false

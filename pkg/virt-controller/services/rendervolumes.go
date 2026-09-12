@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	backendstorage "kubevirt.io/kubevirt/pkg/storage/backend-storage"
 	"kubevirt.io/kubevirt/pkg/tpm"
 
@@ -51,6 +53,15 @@ func withHibernationState(vmi *v1.VirtualMachineInstance, pvcStore cache.Store) 
 		if !ok {
 			return fmt.Errorf("hibernation state PVC cache entry has unexpected type %T", obj)
 		}
+		owner := metav1.GetControllerOf(vmi)
+		if owner == nil || owner.Kind != "VirtualMachine" || !hibernation.StatePVCBoundTo(pvc, owner.UID) {
+			return fmt.Errorf("state PVC is not reserved for this VMI's VM")
+		}
+		for _, volume := range vmi.Spec.Volumes {
+			if volume.PersistentVolumeClaim != nil && volume.PersistentVolumeClaim.ClaimName == claimName || volume.DataVolume != nil && volume.DataVolume.Name == claimName {
+				return fmt.Errorf("state PVC cannot be exposed to the guest")
+			}
+		}
 		if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == k8sv1.PersistentVolumeBlock {
 			return fmt.Errorf("hibernation state PVC must use filesystem volume mode")
 		}
@@ -60,6 +71,14 @@ func withHibernationState(vmi *v1.VirtualMachineInstance, pvcStore cache.Store) 
 		})
 		renderer.podVolumeMounts = append(renderer.podVolumeMounts, k8sv1.VolumeMount{
 			Name: hibernation.StateVolumeName, MountPath: hibernation.StateMountPath,
+		})
+		capacity := hibernation.StateCapacity(vmi)
+		renderer.podVolumes = append(renderer.podVolumes, k8sv1.Volume{
+			Name:         hibernation.StagingVolumeName,
+			VolumeSource: k8sv1.VolumeSource{EmptyDir: &k8sv1.EmptyDirVolumeSource{Medium: k8sv1.StorageMediumMemory, SizeLimit: &capacity}},
+		})
+		renderer.podVolumeMounts = append(renderer.podVolumeMounts, k8sv1.VolumeMount{
+			Name: hibernation.StagingVolumeName, MountPath: hibernation.StagingMountPath,
 		})
 		return nil
 	}

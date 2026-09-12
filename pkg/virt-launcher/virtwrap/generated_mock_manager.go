@@ -322,18 +322,18 @@ func (mr *MockDomainManagerMockRecorder) GuestPing(arg0 any) *gomock.Call {
 }
 
 // HibernateVMI mocks base method.
-func (m *MockDomainManager) HibernateVMI(arg0 *v1.VirtualMachineInstance, arg1 v10.HibernationAction, arg2 string, arg3 bool) (*v10.HibernationResponse, error) {
+func (m *MockDomainManager) HibernateVMI(arg0 *v1.VirtualMachineInstance, arg1 v10.HibernationAction, arg2 string, arg3 bool, arg4 *v10.HibernationProtection) (*v10.HibernationResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HibernateVMI", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "HibernateVMI", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(*v10.HibernationResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // HibernateVMI indicates an expected call of HibernateVMI.
-func (mr *MockDomainManagerMockRecorder) HibernateVMI(arg0, arg1, arg2, arg3 any) *gomock.Call {
+func (mr *MockDomainManagerMockRecorder) HibernateVMI(arg0, arg1, arg2, arg3, arg4 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HibernateVMI", reflect.TypeOf((*MockDomainManager)(nil).HibernateVMI), arg0, arg1, arg2, arg3)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HibernateVMI", reflect.TypeOf((*MockDomainManager)(nil).HibernateVMI), arg0, arg1, arg2, arg3, arg4)
 }
 
 // HotplugHostDevices mocks base method.

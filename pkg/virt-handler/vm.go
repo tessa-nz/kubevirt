@@ -57,6 +57,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/executor"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	"kubevirt.io/kubevirt/pkg/hibernation"
+	"kubevirt.io/kubevirt/pkg/hibernation/protection"
 	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
 	hotplugdisk "kubevirt.io/kubevirt/pkg/hotplug-disk"
 	"kubevirt.io/kubevirt/pkg/hypervisor"
@@ -105,6 +106,7 @@ type downwardMetricsManager interface {
 }
 
 type VirtualMachineController struct {
+	hibernationKeys protection.KeyStore
 	*BaseController
 	capabilities             *libvirtxml.Caps
 	clientset                kubecli.KubevirtClient
@@ -197,6 +199,7 @@ func NewVirtualMachineController(
 
 	c := &VirtualMachineController{
 		BaseController:           baseCtrl,
+		hibernationKeys:          protection.NewNodeTPMStore(filepath.Join(virtPrivateDir, "hibernation-tpm.lock")),
 		capabilities:             capabilities,
 		clientset:                clientset,
 		containerDiskMounter:     containerdisk.NewMounter(podIsolationDetector, containerDiskState, clusterConfig),
@@ -2204,14 +2207,28 @@ func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClie
 	default:
 		return fmt.Errorf("unknown hibernation request %q", request)
 	}
+	protectionContext, err := c.prepareHibernationProtection(client, vmi, request)
+	if err != nil {
+		if phase := hibernation.RejectionPhase(err); phase != "" {
+			vmi.Annotations[hibernation.StateAnnotation] = phase
+		}
+		vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
+		return err
+	}
+	defer func() { clear(protectionContext.PrivateIdentity); protectionContext.PrivateIdentity = nil }()
 	allowKernelMismatch := hibernation.LabEnabled && vmi.Annotations[hibernation.LabAllowKernelMismatchAnnotation] != "" &&
 		vmi.Annotations[hibernation.LabAllowKernelMismatchAnnotation] == vmi.Annotations[hibernation.AttemptAnnotation]
-	response, err := client.HibernateVirtualMachine(vmi, action, filepath.Join(hibernation.StateMountPath, "state.save"), allowKernelMismatch)
+	response, err := client.HibernateVirtualMachine(vmi, action, filepath.Join(hibernation.StateMountPath, "state.save"), allowKernelMismatch, protectionContext)
 	if err != nil {
 		// A dropped response does not prove that save, restore, or consumption
 		// failed. Keep the same request and attempt for idempotent reconciliation.
 		if response != nil && response.Response != nil && !response.Response.Success &&
 			(hibernation.IsTerminal(response.Phase) || response.Phase == hibernation.StateSaveRejected) {
+			if response.Phase == hibernation.StateSaveRejected {
+				if cleanupErr := c.hibernationKeys.Abandon(hibernationAttempt(vmi)); cleanupErr != nil {
+					return fmt.Errorf("save rejected but TPM cleanup is pending: %w", cleanupErr)
+				}
+			}
 			vmi.Annotations[hibernation.StateAnnotation] = response.Phase
 		}
 		vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
@@ -2227,6 +2244,9 @@ func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClie
 		}
 		if !metadata.Completed || metadata.Consumed || metadata.AttemptID == "" || metadata.VMUID == "" || metadata.AttemptID != vmi.Annotations[hibernation.AttemptAnnotation] || metadata.VMUID != vmi.Annotations[hibernation.VMUIDAnnotation] {
 			return fmt.Errorf("save response does not describe the current completed attempt")
+		}
+		if metadata.FormatVersion != 2 || metadata.ProtectionProvider != protection.Provider || metadata.ProtectionKeyID != protectionContext.KeyID || metadata.ProtectionRecipient != protectionContext.Recipient || metadata.StateSize <= 0 || metadata.PlaintextSize <= 0 {
+			return fmt.Errorf("save response does not describe a TPM-protected encrypted artifact")
 		}
 		digest, err := hibernation.ArtifactDigest(metadata)
 		if err != nil {

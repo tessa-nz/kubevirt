@@ -30,6 +30,8 @@ import (
 	"strconv"
 	"strings"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
+
 	"github.com/openshift/library-go/pkg/build/naming"
 	k8sv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -470,6 +472,9 @@ func (t *TemplateService) renderLaunchManifest(vmi *v1.VirtualMachineInstance, i
 			"--ovmf-path", ovmfPath,
 			"--disk-memory-limit", strconv.Itoa(int(t.clusterConfig.GetDiskVerification().MemoryLimit.Value())),
 			"--hypervisor", t.clusterConfig.GetHypervisor().Name,
+		}
+		if vmi.Annotations[hibernation.StatePVCAnnotation] != "" {
+			command = append(command, "--hibernation-state-protection")
 		}
 		if nonRoot {
 			command = append(command, "--run-as-nonroot")
@@ -1034,6 +1039,7 @@ func (t *TemplateService) newResourceRenderer(vmi *v1.VirtualMachineInstance, ne
 	}
 
 	options := append(baseOptions, t.VMIResourcePredicates(vmi, networkToResourceMap, memoryOverhead).Apply()...)
+	options = append(options, withHibernationMemory(vmi, memoryOverhead))
 	return NewResourceRenderer(vmiResources.Limits, vmiResources.Requests, options...), nil
 }
 

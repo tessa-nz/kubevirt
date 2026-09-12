@@ -41,6 +41,7 @@ import (
 
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	"kubevirt.io/kubevirt/pkg/hibernation"
+	"kubevirt.io/kubevirt/pkg/hibernation/protection"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
 	domainerrors "kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/errors"
@@ -54,9 +55,21 @@ const (
 	kvmCapabilityLimit = 256
 )
 
-func (l *LibvirtDomainManager) HibernateVMI(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool) (*cmdv1.HibernationResponse, error) {
+func (l *LibvirtDomainManager) HibernateVMI(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool, protectionContext *cmdv1.HibernationProtection) (*cmdv1.HibernationResponse, error) {
 	l.domainModifyLock.Lock()
 	defer l.domainModifyLock.Unlock()
+
+	l.hibernationContext = protectionContext
+	defer func() {
+		if protectionContext != nil {
+			clear(protectionContext.PrivateIdentity)
+			protectionContext.PrivateIdentity = nil
+		}
+		l.hibernationContext = nil
+	}()
+	if protectionContext == nil || protectionContext.Provider != protection.Provider {
+		return nil, fmt.Errorf("TPM state protection is required")
+	}
 
 	if err := validateStatePath(statePath); err != nil {
 		return nil, err
@@ -95,119 +108,88 @@ func (l *LibvirtDomainManager) HibernateVMI(vmi *v1.VirtualMachineInstance, acti
 }
 
 func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath string) (*hibernation.Metadata, string, error) {
+	key, err := l.hibernationPublicKey()
+	if err != nil {
+		return nil, "", l.rejectSave(vmi, err)
+	}
 	if existing, err := readHibernationMetadata(statePath); err == nil {
 		if existing.Completed && !existing.Consumed && existing.AttemptID == annotation(vmi, hibernation.AttemptAnnotation) {
 			digest, err := hibernation.ArtifactDigest(*existing)
 			if err != nil {
 				return nil, "", err
 			}
-			if readTrimmed(hibernation.SaveInProgressPath) != digest {
-				return nil, "", l.rejectSave(vmi, fmt.Errorf("completed save has no matching launcher integrity record"))
+			if readTrimmed(hibernation.SaveInProgressPath) == digest && existing.ProtectionKeyID == key.ID && existing.ProtectionRecipient == key.Recipient && existing.FormatVersion == 2 {
+				return existing, hibernation.StateHibernated, nil
 			}
-			return existing, hibernation.StateHibernated, nil
+			// A publication whose final marker write failed can only be recovered
+			// from the private completed stage, never from the mutable PVC.
+		} else if existing.ErasedAt == "" {
+			return nil, "", l.rejectSave(vmi, fmt.Errorf("state path contains another active artifact"))
 		}
-		if existing.ErasedAt == "" {
-			return nil, "", l.rejectSave(vmi, fmt.Errorf("state path already contains attempt %q (completed=%t consumed=%t)", existing.AttemptID, existing.Completed, existing.Consumed))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
+	}
+	stage, err := hibernationStage(vmi)
+	if err != nil {
+		return nil, "", l.rejectSave(vmi, err)
+	}
+	metadata, err := readHibernationMetadata(stage)
+	if err == nil {
+		if metadata.AttemptID != annotation(vmi, hibernation.AttemptAnnotation) || metadata.VMUID != annotation(vmi, hibernation.VMUIDAnnotation) || metadata.ProtectionKeyID != key.ID || metadata.ProtectionRecipient != key.Recipient {
+			return nil, "", fmt.Errorf("private save stage belongs to another attempt or key")
 		}
-		if err := os.Rename(metadataPath(statePath), filepath.Join(filepath.Dir(statePath), "metadata."+existing.AttemptID+".json")); err != nil {
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
+	} else {
+		if err := requireEmptyStateSlot(statePath); err != nil {
+			return nil, "", l.rejectSave(vmi, err)
+		}
+		if _, err := os.Lstat(statePath + ".partial"); !errors.Is(err, os.ErrNotExist) {
+			return nil, "", l.rejectSave(vmi, fmt.Errorf("unpublished state already exists"))
+		}
+		if _, err := os.Lstat(stage); !errors.Is(err, os.ErrNotExist) {
+			return nil, "", fmt.Errorf("private image lacks its original save descriptor")
+		}
+		metadata, err = l.currentMetadata(vmi)
+		if err != nil {
 			return nil, "", err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, "", err
-	} else if err := requireEmptyStateSlot(statePath); err != nil {
-		return nil, "", l.rejectSave(vmi, err)
-	}
-	if _, err := os.Stat(statePath + ".partial"); err == nil {
-		return nil, "", l.rejectSave(vmi, fmt.Errorf("partial save already exists"))
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, "", err
-	}
-
-	metadata, err := l.currentMetadata(vmi)
-	if err != nil {
-		return nil, "", err
-	}
-	domainName := api.VMINamespaceKeyFunc(vmi)
-	domain, err := l.virConn.LookupDomainByName(domainName)
-	if err != nil {
-		return nil, "", err
-	}
-	defer domain.Free()
-	state, _, err := domain.GetState()
-	if err != nil {
-		return nil, "", err
-	}
-	if cli.IsDown(state) {
-		return nil, "", hibernation.Reject(hibernation.StateSaveIncomplete, fmt.Errorf("cannot save inactive domain"))
-	}
-	metadata.SourceVMIUID = string(vmi.UID)
-	metadata.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := os.WriteFile(hibernation.SaveInProgressPath, []byte(metadata.AttemptID), 0600); err != nil {
-		return nil, "", err
-	}
-	publicationComplete := false
-	defer func() {
-		if !publicationComplete {
-			_ = os.Remove(hibernation.SaveInProgressPath)
+		metadata.ProtectionProvider, metadata.ProtectionKeyID, metadata.ProtectionRecipient = protection.Provider, key.ID, key.Recipient
+		metadata.SourceVMIUID = string(vmi.UID)
+		metadata.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		// Persist the private descriptor before stopping QEMU. Its completed save
+		// image can be recovered after a lost response or any later XML/I/O error.
+		if err := writeHibernationMetadata(stage, metadata); err != nil {
+			return nil, "", err
 		}
-	}()
-
-	partial := statePath + ".partial"
-	if err := domain.SaveFlags(partial, "", libvirt.DOMAIN_SAVE_PAUSED); err != nil {
-		return nil, "", l.rejectSave(vmi, err)
 	}
-	savedXML, err := l.virConn.DomainSaveImageGetXMLDesc(partial, 0)
-	if err != nil {
-		return nil, "", err
+	if !metadata.Completed {
+		if err := l.completeHibernationStage(vmi, stage, metadata); err != nil {
+			return nil, "", err
+		}
+	} else {
+		hash, size, err := checksumFile(stage)
+		if err != nil {
+			return nil, "", err
+		}
+		if hash != metadata.PlaintextSHA256 || size != metadata.PlaintextSize {
+			return nil, "", fmt.Errorf("private save stage changed")
+		}
 	}
-	savedXML, err = ejectTransientCloudInitMedia(savedXML)
-	if err != nil {
-		return nil, "", err
-	}
-	savedXML, err = setDomainKubeVirtUID(savedXML, string(vmi.UID))
-	if err != nil {
-		return nil, "", err
-	}
-	if err := l.virConn.DomainSaveImageDefineXML(partial, savedXML, 0); err != nil {
-		return nil, "", err
-	}
-	committedXML, err := l.virConn.DomainSaveImageGetXMLDesc(partial, 0)
-	if err != nil {
-		return nil, "", err
-	}
-	metadata.DomainXMLHash = hibernation.HashBytes([]byte(committedXML))
-	checksum, size, err := checksumFile(partial)
-	if err != nil {
-		return nil, "", err
-	}
-	metadata.StateSHA256 = checksum
-	metadata.StateSize = size
-	metadata.Completed = true
-	metadata.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := os.Rename(partial, statePath); err != nil {
-		return nil, "", err
-	}
-	if err := syncPath(statePath); err != nil {
-		return nil, "", err
-	}
-	if err := writeHibernationMetadata(statePath, metadata); err != nil {
+	if err := publishEncryptedHibernation(stage, statePath, key, metadata); err != nil {
 		return nil, "", err
 	}
 	digest, err := hibernation.ArtifactDigest(*metadata)
 	if err != nil {
 		return nil, "", err
 	}
-	// This marker lives outside the state PVC. Preserve the original digest
-	// across a dropped RPC response or launcher process restart, so a retry
-	// cannot adopt metadata rewritten by a state-volume writer.
 	if err := writeDurableFile(hibernation.SaveInProgressPath, []byte(digest)); err != nil {
 		return nil, "", err
 	}
-	// Keep the launcher-local marker after a successful publication. QEMU has
-	// exited, so the process monitor must not terminate the launcher before the
-	// RPC response reaches virt-handler. The controller's VMI deletion removes
-	// the disposable launcher pod and its marker after observing Hibernated.
-	publicationComplete = true
+	// Removing plaintext is best effort here: the disposable source pod's
+	// private tmpfs disappears after the controller anchors this receipt.
+	_ = os.Remove(stage)
+	_ = os.Remove(metadataPath(stage))
 	return metadata, hibernation.StateHibernated, nil
 }
 
@@ -254,14 +236,12 @@ func (l *LibvirtDomainManager) restoreVMI(vmi *v1.VirtualMachineInstance, stateP
 	if metadata.SourceVMIUID == "" || vmi.UID == "" {
 		return nil, "", hibernation.Reject(hibernation.StateResumeRejected, fmt.Errorf("source and destination VMI identities are required"))
 	}
-	checksum, size, err := checksumFile(statePath)
+	privatePath, err := l.decryptHibernation(vmi, statePath, metadata)
 	if err != nil {
-		return nil, "", err
+		return nil, "", hibernation.Reject(hibernation.StateResumeRejected, err)
 	}
-	if checksum != metadata.StateSHA256 || size != metadata.StateSize {
-		return nil, "", hibernation.Reject(hibernation.StateResumeRejected, fmt.Errorf("state artifact checksum or size mismatch"))
-	}
-	savedXML, err := l.virConn.DomainSaveImageGetXMLDesc(statePath, 0)
+	defer os.Remove(privatePath)
+	savedXML, err := l.virConn.DomainSaveImageGetXMLDesc(privatePath, 0)
 	if err != nil {
 		return nil, "", err
 	}
@@ -316,7 +296,7 @@ func (l *LibvirtDomainManager) restoreVMI(vmi *v1.VirtualMachineInstance, stateP
 	if err != nil {
 		return nil, "", err
 	}
-	if err := l.virConn.DomainRestoreFlags(statePath, restoreXML, libvirt.DOMAIN_SAVE_PAUSED); err != nil {
+	if err := l.virConn.DomainRestoreFlags(privatePath, restoreXML, libvirt.DOMAIN_SAVE_PAUSED); err != nil {
 		// A lost libvirt response can accompany a successful paused restore.
 		// Only a confirmed absent domain proves a rejected restore.
 		if domain, lookupErr := l.virConn.LookupDomainByName(api.VMINamespaceKeyFunc(vmi)); lookupErr == nil {
@@ -386,17 +366,20 @@ func setDomainKubeVirtUID(domainXML, uid string) (string, error) {
 }
 
 func (l *LibvirtDomainManager) commitAndUnpauseVMI(vmi *v1.VirtualMachineInstance, statePath string) (*hibernation.Metadata, string, error) {
+	if l.hibernationContext == nil || !l.hibernationContext.ConsumptionCommitted {
+		return nil, "", fmt.Errorf("TPM consumption must be committed before unpause")
+	}
 	metadata, err := readHibernationMetadata(statePath)
 	if err != nil {
 		return nil, "", err
 	}
-	if metadata.AttemptID != annotation(vmi, hibernation.AttemptAnnotation) {
-		return nil, "", fmt.Errorf("attempt identity mismatch")
+	if err := validateArtifactDigest(vmi, metadata); err != nil {
+		return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, err)
 	}
 	domain, err := l.virConn.LookupDomainByName(api.VMINamespaceKeyFunc(vmi))
 	if err != nil {
-		if metadata.Consumed && domainerrors.IsNotFound(err) {
-			return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("consumed artifact has no domain"))
+		if domainerrors.IsNotFound(err) {
+			return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("consumed attempt has no domain"))
 		}
 		return nil, "", err
 	}
@@ -405,17 +388,18 @@ func (l *LibvirtDomainManager) commitAndUnpauseVMI(vmi *v1.VirtualMachineInstanc
 	if err != nil {
 		return nil, "", err
 	}
-	if metadata.Consumed {
-		if state == libvirt.DOMAIN_RUNNING {
-			return metadata, hibernation.StateRunningAwaitingVerification, nil
+	if state == libvirt.DOMAIN_RUNNING {
+		metadata.Consumed = true
+		if metadata.ConsumedAt == "" {
+			metadata.ConsumedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
-		return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("consumed artifact domain is not running"))
+		if err := writeHibernationMetadata(statePath, metadata); err != nil {
+			return nil, "", err
+		}
+		return metadata, hibernation.StateRunningAwaitingVerification, nil
 	}
-	if !cli.IsPaused(state) {
-		return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("restored domain must be paused before consumption"))
-	}
-	if hibernation.LabEnabled && annotation(vmi, hibernation.LabFailBeforeConsumeAnnotation) == metadata.AttemptID {
-		return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("injected failure before consumed marker"))
+	if !l.hibernationContext.FreshConsumption || !cli.IsPaused(state) || metadata.Consumed {
+		return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("cannot unpause an attempt after uncertain or repeated consumption"))
 	}
 	metadata.Consumed = true
 	metadata.ConsumedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -423,26 +407,23 @@ func (l *LibvirtDomainManager) commitAndUnpauseVMI(vmi *v1.VirtualMachineInstanc
 		return nil, "", err
 	}
 	if hibernation.LabEnabled && annotation(vmi, hibernation.LabFailAfterConsumeAnnotation) == metadata.AttemptID {
-		return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("injected failure after consumed marker before unpause"))
+		return nil, "", hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("injected failure after TPM consumption before unpause"))
 	}
 	if err := domain.Resume(); err != nil {
-		// Reconcile the consumed marker and the existing domain after an
-		// uncertain response. Never restore the image again.
 		return nil, "", fmt.Errorf("consumption committed; unpause outcome unknown: %w", err)
 	}
 	return metadata, hibernation.StateRunningAwaitingVerification, nil
 }
 
 func (l *LibvirtDomainManager) eraseVMI(vmi *v1.VirtualMachineInstance, statePath string) (*hibernation.Metadata, string, error) {
+	if l.hibernationContext == nil || !l.hibernationContext.KeyErased {
+		return nil, "", fmt.Errorf("TPM key erasure must be verified before finalization")
+	}
+	// Key deletion is the erasure boundary. A damaged or deleted PVC metadata
+	// file cannot invalidate that fact; retain only a nonsecret completion record.
 	metadata, err := readHibernationMetadata(statePath)
-	if err != nil {
-		return nil, "", err
-	}
-	if metadata.AttemptID != annotation(vmi, hibernation.AttemptAnnotation) {
-		return nil, "", fmt.Errorf("attempt identity mismatch")
-	}
-	if !metadata.Consumed {
-		return nil, "", fmt.Errorf("refusing to erase unconsumed artifact")
+	if err != nil || metadata.AttemptID != annotation(vmi, hibernation.AttemptAnnotation) {
+		metadata = &hibernation.Metadata{FormatVersion: 2, AttemptID: annotation(vmi, hibernation.AttemptAnnotation), VMUID: annotation(vmi, hibernation.VMUIDAnnotation), Consumed: true}
 	}
 	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, "", err
@@ -500,7 +481,7 @@ func (l *LibvirtDomainManager) currentMetadata(vmi *v1.VirtualMachineInstance) (
 		return nil, fmt.Errorf("attempt ID and VM UID annotations are required")
 	}
 	return &hibernation.Metadata{
-		FormatVersion:     1,
+		FormatVersion:     2,
 		AttemptID:         attemptID,
 		VMUID:             vmUID,
 		EffectiveSpecHash: specHash,
@@ -577,7 +558,7 @@ func requireEmptyStateSlot(statePath string) error {
 }
 
 func readHibernationMetadata(statePath string) (*hibernation.Metadata, error) {
-	payload, err := os.ReadFile(metadataPath(statePath))
+	payload, err := readBoundedRegularFile(metadataPath(statePath), 1<<20)
 	if err != nil {
 		return nil, err
 	}
@@ -597,14 +578,22 @@ func writeHibernationMetadata(statePath string, metadata *hibernation.Metadata) 
 }
 
 func writeDurableFile(target string, payload []byte) error {
-	temporary := target + ".partial"
-	if err := os.WriteFile(temporary, append(payload, '\n'), 0600); err != nil {
+	file, err := os.CreateTemp(filepath.Dir(target), ".hibernation-*")
+	if err != nil {
 		return err
 	}
-	if err := syncPath(temporary); err != nil {
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if _, err := file.Write(append(payload, '\n')); err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, target); err != nil {
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(file.Name(), target); err != nil {
 		return err
 	}
 	return syncPath(filepath.Dir(target))

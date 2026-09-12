@@ -65,7 +65,7 @@ func TestHibernationPublicRequest(t *testing.T) {
 				cfg.DeveloperConfiguration = &v1.DeveloperConfiguration{FeatureGates: []string{featuregate.HibernationGate}}
 			}
 			config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(cfg)
-			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", ResourceVersion: "42", Annotations: map[string]string{hibernation.StatePVCAnnotation: "state", hibernation.StateAnnotation: tc.state, hibernation.ArtifactDigestAnnotation: "digest"}}}
+			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "vm-uid", ResourceVersion: "42", Annotations: map[string]string{hibernation.StatePVCAnnotation: "state", hibernation.StateAnnotation: tc.state, hibernation.ArtifactDigestAnnotation: "digest"}}}
 			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StatePVCAnnotation: "state"}}, Spec: v1.VirtualMachineInstanceSpec{Domain: v1.DomainSpec{Resources: v1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Gi")}}}}, Status: v1.VirtualMachineInstanceStatus{Phase: v1.Running, Conditions: []v1.VirtualMachineInstanceCondition{{Type: v1.VirtualMachineInstanceReady, Status: corev1.ConditionTrue}}}}
 			if tc.gate {
 				client.EXPECT().VirtualMachine("default").Return(vmClient).AnyTimes()
@@ -78,7 +78,7 @@ func TestHibernationPublicRequest(t *testing.T) {
 				}
 				if tc.operation == "hibernate" {
 					sc := "encrypted"
-					pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "state", Namespace: "default"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &sc, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound, Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(tc.capacity)}}}
+					pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "state", Namespace: "default", Annotations: map[string]string{hibernation.VMUIDAnnotation: "vm-uid"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: v1.SchemeGroupVersion.String(), Kind: "VirtualMachine", Name: "test", UID: "vm-uid"}}}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &sc, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound, Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(tc.capacity)}}}
 					storageClass := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: sc}}
 					if tc.approved {
 						storageClass.Annotations = map[string]string{encryptedHibernationStorageAnnotation: "true"}

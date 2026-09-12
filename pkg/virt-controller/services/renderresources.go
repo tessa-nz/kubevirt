@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "kubevirt.io/api/core/v1"
 
+	"kubevirt.io/kubevirt/pkg/hibernation"
 	netvmispec "kubevirt.io/kubevirt/pkg/network/vmispec"
 	"kubevirt.io/kubevirt/pkg/util"
 	"kubevirt.io/kubevirt/pkg/util/hardware"
@@ -20,6 +21,30 @@ import (
 )
 
 type ResourceRendererOption func(renderer *ResourceRenderer)
+
+// Hibernation may briefly hold both the guest and its save image in RAM. This
+// reservation is unconditional even when ordinary guest-overhead overcommit or
+// cluster memory overcommit is configured.
+func withHibernationMemory(vmi *v1.VirtualMachineInstance, overhead resource.Quantity) ResourceRendererOption {
+	return func(renderer *ResourceRenderer) {
+		if vmi.Annotations[hibernation.StatePVCAnnotation] == "" {
+			return
+		}
+		required := hibernation.StateCapacity(vmi)
+		required.Add(overhead)
+		if vmi.Spec.Domain.Memory == nil || vmi.Spec.Domain.Memory.Hugepages == nil {
+			required.Add(*resource.NewQuantity(hibernation.GuestMemoryBytes(vmi), resource.BinarySI))
+		}
+		requests := renderer.Requests()
+		if requests.Memory().Cmp(required) < 0 {
+			renderer.vmRequests[k8sv1.ResourceMemory] = required
+		}
+		limits := renderer.Limits()
+		if limit, exists := limits[k8sv1.ResourceMemory]; exists && limit.Cmp(required) < 0 {
+			renderer.vmLimits[k8sv1.ResourceMemory] = required
+		}
+	}
+}
 
 type ResourceRenderer struct {
 	vmLimits           k8sv1.ResourceList

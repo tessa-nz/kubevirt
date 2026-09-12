@@ -1,0 +1,112 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "doc.go",
+        "include.c",
+        "internal_cgo.go",
+        "internal_cross.go",
+    ],
+    cdeps = ["//vendor/github.com/google/go-tpm-tools/simulator/ms-tpm-20-ref:headers"],
+    cgo = True,
+    clinkopts = select({
+        "@io_bazel_rules_go//go/platform:darwin_amd64": [
+            "-L/usr/local/opt/openssl/lib",
+        ],
+        "@io_bazel_rules_go//go/platform:darwin_arm64": [
+            "-L/opt/homebrew/opt/openssl/lib",
+        ],
+        "@io_bazel_rules_go//go/platform:ios_amd64": [
+            "-L/usr/local/opt/openssl/lib",
+        ],
+        "@io_bazel_rules_go//go/platform:ios_arm64": [
+            "-L/opt/homebrew/opt/openssl/lib",
+        ],
+        "//conditions:default": [],
+    }) + ["-lcrypto"],
+    copts = [
+        "-DALG_SHA512=ALG_YES",
+        "-DCERTIFYX509_DEBUG=NO",
+        "-DCOMPILER_CHECKS=DEBUG",
+        "-DDEBUG=YES",
+        "-DECC_NIST_P224=YES",
+        "-DECC_NIST_P521=YES",
+        "-DMAX_CONTEXT_SIZE=1360",
+        "-DRUNTIME_SIZE_CHECKS=DEBUG",
+        "-DSIMULATION=NO",
+        "-DUSE_DA_USED=NO",
+        "-DVTPM=NO -DSIMULATION=NO -DUSE_DA_USED=NO",
+        "-I vendor/github.com/google/go-tpm-tools/simulator/ms-tpm-20-ref/Samples/Google",
+        "-I vendor/github.com/google/go-tpm-tools/simulator/ms-tpm-20-ref/TPMCmd/tpm/include",
+        "-I vendor/github.com/google/go-tpm-tools/simulator/ms-tpm-20-ref/TPMCmd/tpm/include/prototypes",
+        "-I vendor/github.com/google/go-tpm-tools/simulator/ms-tpm-20-ref/TPMCmd/tpm/src",
+        "-Wno-deprecated-declarations",
+        "-Wno-missing-braces -Wno-empty-body -Wno-unused-variable -Wno-uninitialized",
+        "-std=gnu11 -Wall -Wformat-security -fPIC",
+    ] + select({
+        "@io_bazel_rules_go//go/platform:aix": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:android": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:darwin": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:dragonfly": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:freebsd": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:illumos": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:ios": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:js": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:linux": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:netbsd": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:openbsd": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:osx": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:plan9": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:qnx": [
+            "-fstack-protector-all",
+        ],
+        "@io_bazel_rules_go//go/platform:solaris": [
+            "-fstack-protector-all",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@io_bazel_rules_go//go/platform:darwin_amd64": [
+            "-I/usr/local/opt/openssl/include",
+        ],
+        "@io_bazel_rules_go//go/platform:darwin_arm64": [
+            "-I/opt/homebrew/opt/openssl/include",
+        ],
+        "@io_bazel_rules_go//go/platform:ios_amd64": [
+            "-I/usr/local/opt/openssl/include",
+        ],
+        "@io_bazel_rules_go//go/platform:ios_arm64": [
+            "-I/opt/homebrew/opt/openssl/include",
+        ],
+        "//conditions:default": [],
+    }),
+    importmap = "kubevirt.io/kubevirt/vendor/github.com/google/go-tpm-tools/simulator/internal",
+    importpath = "github.com/google/go-tpm-tools/simulator/internal",
+    visibility = ["//vendor/github.com/google/go-tpm-tools/simulator:__subpackages__"],
+)

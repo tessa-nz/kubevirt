@@ -59,7 +59,7 @@ func TestHibernateRPCDeadlineAllowsMemoryTransfer(t *testing.T) {
 			}
 			return &cmdv1.HibernationResponse{Response: &cmdv1.Response{Success: true}}, nil
 		})
-	if _, err := client.HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_SAVE, "/state", false); err != nil {
+	if _, err := client.HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_SAVE, "/state", false, nil); err != nil {
 		t.Fatal(err)
 	}
 }

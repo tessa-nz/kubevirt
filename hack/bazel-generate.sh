@@ -27,6 +27,11 @@ bazel run \
     --config=${ARCHITECTURE} ${BAZEL_CS_CONFIG} \
     -- :buildozer 'add cdeps //:libnbd-libs' //vendor/libguestfs.org/libnbd/:go_default_library
 
+# The TPM emulator includes vendored C sources from a sibling directory.
+bazel run \
+    --config=${ARCHITECTURE} ${BAZEL_CS_CONFIG} \
+    -- :buildozer 'add cdeps //vendor/github.com/google/go-tpm-tools/simulator/ms-tpm-20-ref:headers' 'add clinkopts -lcrypto' //vendor/github.com/google/go-tpm-tools/simulator/internal:go_default_library
+
 # align BAZEL files to a single format
 bazel run \
     --config=${ARCHITECTURE} ${BAZEL_CS_CONFIG} \

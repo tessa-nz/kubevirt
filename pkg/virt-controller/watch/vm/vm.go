@@ -1260,6 +1260,9 @@ func (c *Controller) cleanupRestartRequired(vm *virtv1.VirtualMachine) *virtv1.V
 }
 
 func (c *Controller) startVMI(vm *virtv1.VirtualMachine) (*virtv1.VirtualMachine, error) {
+	if err := c.reserveHibernationStatePVC(vm); err != nil {
+		return vm, err
+	}
 	ready, err := c.handleDataVolumes(vm)
 	if err != nil {
 		return vm, err

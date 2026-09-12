@@ -1,0 +1,35 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "image.go",
+        "keys.go",
+        "memory.go",
+        "tpm.go",
+    ],
+    importpath = "kubevirt.io/kubevirt/pkg/hibernation/protection",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/filippo.io/age:go_default_library",
+        "//vendor/github.com/google/go-tpm/tpm2:go_default_library",
+        "//vendor/github.com/google/go-tpm/tpm2/transport:go_default_library",
+        "//vendor/github.com/google/go-tpm/tpm2/transport/linuxtpm:go_default_library",
+        "//vendor/golang.org/x/sys/unix:go_default_library",
+    ],
+)
+
+go_test(
+    name = "go_default_test",
+    srcs = [
+        "image_test.go",
+        "tpm_test.go",
+    ],
+    embed = [":go_default_library"],
+    deps = [
+        "//vendor/filippo.io/age:go_default_library",
+        "//vendor/github.com/google/go-tpm-tools/simulator:go_default_library",
+        "//vendor/github.com/google/go-tpm/tpm2:go_default_library",
+        "//vendor/github.com/google/go-tpm/tpm2/transport:go_default_library",
+    ],
+)

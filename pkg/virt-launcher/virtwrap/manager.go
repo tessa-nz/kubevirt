@@ -168,7 +168,7 @@ type contextStore struct {
 
 type DomainManager interface {
 	SyncVMI(*v1.VirtualMachineInstance, bool, *cmdv1.VirtualMachineOptions) (*api.DomainSpec, error)
-	HibernateVMI(*v1.VirtualMachineInstance, cmdv1.HibernationAction, string, bool) (*cmdv1.HibernationResponse, error)
+	HibernateVMI(*v1.VirtualMachineInstance, cmdv1.HibernationAction, string, bool, *cmdv1.HibernationProtection) (*cmdv1.HibernationResponse, error)
 	PauseVMI(*v1.VirtualMachineInstance) error
 	UnpauseVMI(*v1.VirtualMachineInstance) error
 	FreezeVMI(*v1.VirtualMachineInstance, int32) error
@@ -209,7 +209,8 @@ type DomainManager interface {
 }
 
 type LibvirtDomainManager struct {
-	virConn cli.Connection
+	hibernationContext *cmdv1.HibernationProtection // protected by domainModifyLock
+	virConn            cli.Connection
 
 	// Anytime a get and a set is done on the domain, this lock must be held.
 	domainModifyLock sync.Mutex

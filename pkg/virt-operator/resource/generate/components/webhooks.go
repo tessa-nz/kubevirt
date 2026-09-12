@@ -334,6 +334,10 @@ func NewVirtAPIValidatingWebhookConfiguration(installNamespace string) *admissio
 			},
 		},
 		Webhooks: []admissionregistrationv1.ValidatingWebhook{
+			hibernationPodWebhook(installNamespace),
+			hibernationPVCWebhook(installNamespace),
+			hibernationSnapshotWebhook(installNamespace),
+			hibernationCopyWebhook(installNamespace),
 			{
 				Name:                    "virt-launcher-eviction-interceptor.kubevirt.io",
 				AdmissionReviewVersions: []string{"v1"},

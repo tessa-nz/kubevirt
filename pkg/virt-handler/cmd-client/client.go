@@ -96,7 +96,7 @@ type LauncherClient interface {
 	SyncVirtualMachine(vmi *v1.VirtualMachineInstance, options *cmdv1.VirtualMachineOptions) error
 	PauseVirtualMachine(vmi *v1.VirtualMachineInstance) error
 	UnpauseVirtualMachine(vmi *v1.VirtualMachineInstance) error
-	HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool) (*cmdv1.HibernationResponse, error)
+	HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool, protectionContext *cmdv1.HibernationProtection) (*cmdv1.HibernationResponse, error)
 	FreezeVirtualMachine(vmi *v1.VirtualMachineInstance, unfreezeTimeoutSeconds int32) error
 	UnfreezeVirtualMachine(vmi *v1.VirtualMachineInstance) error
 	SyncMigrationTarget(vmi *v1.VirtualMachineInstance, options *cmdv1.VirtualMachineOptions) error
@@ -342,7 +342,7 @@ func (c *VirtLauncherClient) UnpauseVirtualMachine(vmi *v1.VirtualMachineInstanc
 	return c.genericSendVMICmd("Unpause", c.v1client.UnpauseVirtualMachine, vmi, &cmdv1.VirtualMachineOptions{})
 }
 
-func (c *VirtLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool) (*cmdv1.HibernationResponse, error) {
+func (c *VirtLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action cmdv1.HibernationAction, statePath string, allowKernelMismatch bool, protectionContext *cmdv1.HibernationProtection) (*cmdv1.HibernationResponse, error) {
 	vmiJSON, err := json.Marshal(vmi)
 	if err != nil {
 		return nil, err
@@ -352,6 +352,7 @@ func (c *VirtLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInsta
 		Action:              action,
 		StatePath:           statePath,
 		AllowKernelMismatch: allowKernelMismatch,
+		Protection:          protectionContext,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), hibernationTimeout(vmi))
 	defer cancel()

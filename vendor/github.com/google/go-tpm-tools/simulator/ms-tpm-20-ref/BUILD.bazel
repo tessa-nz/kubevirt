@@ -1,0 +1,10 @@
+# Upstream includes these C sources from simulator/internal/include.c.
+cc_library(
+    name = "headers",
+    textual_hdrs = glob([
+        "**/*.h",
+        "**/*.c",
+        "**/*.inc",
+    ]),
+    visibility = ["//vendor/github.com/google/go-tpm-tools/simulator/internal:__pkg__"],
+)

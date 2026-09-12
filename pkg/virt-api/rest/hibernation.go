@@ -26,7 +26,6 @@ import (
 	"github.com/emicklei/go-restful/v3"
 	k8sv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "kubevirt.io/api/core/v1"
@@ -176,6 +175,9 @@ func (app *SubresourceAPIApp) validateHibernationStorage(ctx context.Context, vm
 	if statusErr != nil {
 		return statusErr
 	}
+	if !hibernation.StatePVCBoundTo(pvc, vm.UID) {
+		return errors.NewConflict(v1.Resource("persistentvolumeclaim"), name, fmt.Errorf("state PVC is not reserved for this VM"))
+	}
 	if len(pvc.Spec.AccessModes) == 0 || pvc.Status.Phase != k8sv1.ClaimBound || pvc.Spec.StorageClassName == nil || (pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == k8sv1.PersistentVolumeBlock) {
 		return errors.NewConflict(v1.Resource("persistentvolumeclaim"), name, fmt.Errorf("hibernation requires a bound filesystem PVC with an approved encrypted StorageClass"))
 	}
@@ -191,14 +193,8 @@ func (app *SubresourceAPIApp) validateHibernationStorage(ctx context.Context, vm
 	if storageClass.Annotations[encryptedHibernationStorageAnnotation] != "true" {
 		return errors.NewConflict(v1.Resource("persistentvolumeclaim"), name, fmt.Errorf("StorageClass has not been approved for encrypted hibernation state"))
 	}
-	memory := vmi.Spec.Domain.Resources.Requests.Memory().Value()
-	if vmi.Spec.Domain.Memory != nil && vmi.Spec.Domain.Memory.Guest != nil && vmi.Spec.Domain.Memory.Guest.Value() > memory {
-		memory = vmi.Spec.Domain.Memory.Guest.Value()
-	}
-	required := resource.NewQuantity(memory, resource.BinarySI)
-	required.Add(*resource.NewQuantity(memory/10, resource.BinarySI))
-	required.Add(*resource.NewQuantity(1<<30, resource.BinarySI))
-	if pvc.Status.Capacity.Storage().Cmp(*required) < 0 {
+	required := hibernation.StateCapacity(vmi)
+	if pvc.Status.Capacity.Storage().Cmp(required) < 0 {
 		return errors.NewConflict(v1.Resource("persistentvolumeclaim"), name, fmt.Errorf("state PVC must hold guest RAM plus 10 percent and 1 GiB overhead"))
 	}
 	return nil

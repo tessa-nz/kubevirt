@@ -1,0 +1,38 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "audit.go",
+        "bitfield.go",
+        "child_object_crypto.go",
+        "constants.go",
+        "constants_internal.go",
+        "create_credential.go",
+        "create_duplicate.go",
+        "create_salt.go",
+        "crypto.go",
+        "errors.go",
+        "kdf.go",
+        "labeled_kem_convert.go",
+        "labeled_kem_ecc.go",
+        "labeled_kem_rsa.go",
+        "marshalling.go",
+        "names.go",
+        "pcrs.go",
+        "policy.go",
+        "reflect.go",
+        "sessions.go",
+        "structures.go",
+        "templates.go",
+        "tpm2.go",
+        "tpm2b.go",
+    ],
+    importmap = "kubevirt.io/kubevirt/vendor/github.com/google/go-tpm/tpm2",
+    importpath = "github.com/google/go-tpm/tpm2",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/google/go-tpm/legacy/tpm2:go_default_library",
+        "//vendor/github.com/google/go-tpm/tpm2/transport:go_default_library",
+    ],
+)

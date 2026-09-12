@@ -1,0 +1,13 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["simulator.go"],
+    importmap = "kubevirt.io/kubevirt/vendor/github.com/google/go-tpm-tools/simulator",
+    importpath = "github.com/google/go-tpm-tools/simulator",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/google/go-tpm-tools/simulator/internal:go_default_library",
+        "//vendor/github.com/google/go-tpm/legacy/tpm2:go_default_library",
+    ],
+)

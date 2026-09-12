@@ -26,6 +26,7 @@ import (
 )
 
 const (
+	StateProtectionNamespaceLabel    = "hibernation.kubevirt.io/state-protection"
 	StatePVCAnnotation               = "hibernation.kubevirt.io/state-pvc"
 	RequestAnnotation                = "hibernation.kubevirt.io/request"
 	StateAnnotation                  = "hibernation.kubevirt.io/state"
@@ -41,6 +42,8 @@ const (
 
 	StateMountPath     = "/var/run/kubevirt-private/hibernation"
 	StateVolumeName    = "hibernation-state"
+	StagingMountPath   = "/var/run/kubevirt-private/hibernation-staging"
+	StagingVolumeName  = "hibernation-staging"
 	SaveInProgressPath = "/var/run/kubevirt-private/hibernation-save-in-progress"
 
 	RequestSave          = "save"
@@ -77,6 +80,11 @@ type Metadata struct {
 	DomainXMLHash       string            `json:"domainXMLHash"`
 	StateSHA256         string            `json:"stateSHA256"`
 	StateSize           int64             `json:"stateSize"`
+	PlaintextSHA256     string            `json:"plaintextSHA256,omitempty"`
+	PlaintextSize       int64             `json:"plaintextSize,omitempty"`
+	ProtectionProvider  string            `json:"protectionProvider,omitempty"`
+	ProtectionKeyID     string            `json:"protectionKeyID,omitempty"`
+	ProtectionRecipient string            `json:"protectionRecipient,omitempty"`
 	PVCIdentities       map[string]string `json:"pvcIdentities"`
 	NodeName            string            `json:"nodeName"`
 	CPUModel            string            `json:"cpuModel"`

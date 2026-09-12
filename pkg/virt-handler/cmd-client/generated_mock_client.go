@@ -311,18 +311,18 @@ func (mr *MockLauncherClientMockRecorder) GuestPing(arg0, arg1 any) *gomock.Call
 }
 
 // HibernateVirtualMachine mocks base method.
-func (m *MockLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action v10.HibernationAction, statePath string, allowKernelMismatch bool) (*v10.HibernationResponse, error) {
+func (m *MockLauncherClient) HibernateVirtualMachine(vmi *v1.VirtualMachineInstance, action v10.HibernationAction, statePath string, allowKernelMismatch bool, protectionContext *v10.HibernationProtection) (*v10.HibernationResponse, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HibernateVirtualMachine", vmi, action, statePath, allowKernelMismatch)
+	ret := m.ctrl.Call(m, "HibernateVirtualMachine", vmi, action, statePath, allowKernelMismatch, protectionContext)
 	ret0, _ := ret[0].(*v10.HibernationResponse)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // HibernateVirtualMachine indicates an expected call of HibernateVirtualMachine.
-func (mr *MockLauncherClientMockRecorder) HibernateVirtualMachine(vmi, action, statePath, allowKernelMismatch any) *gomock.Call {
+func (mr *MockLauncherClientMockRecorder) HibernateVirtualMachine(vmi, action, statePath, allowKernelMismatch, protectionContext any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HibernateVirtualMachine", reflect.TypeOf((*MockLauncherClient)(nil).HibernateVirtualMachine), vmi, action, statePath, allowKernelMismatch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HibernateVirtualMachine", reflect.TypeOf((*MockLauncherClient)(nil).HibernateVirtualMachine), vmi, action, statePath, allowKernelMismatch, protectionContext)
 }
 
 // HotplugHostDevices mocks base method.

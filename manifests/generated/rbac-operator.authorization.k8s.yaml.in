@@ -404,6 +404,12 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+- apiGroups:
   - storage.k8s.io
   resources:
   - storageclasses

@@ -1005,6 +1005,9 @@ func (app *virtAPIApp) prepareCertManager() {
 }
 
 func (app *virtAPIApp) registerValidatingWebhooks(informers *webhooks.Informers) {
+	http.HandleFunc(components.HibernationStateValidatePath, func(w http.ResponseWriter, r *http.Request) {
+		validating_webhook.ServeHibernationState(w, r, app.virtCli, app.kubeVirtServiceAccounts)
+	})
 	http.HandleFunc(components.VMICreateValidatePath, func(w http.ResponseWriter, r *http.Request) {
 		validating_webhook.ServeVMICreate(w, r, app.clusterConfig, app.kubeVirtServiceAccounts,
 			func(field *field.Path, vmiSpec *v1.VirtualMachineInstanceSpec, clusterCfg *virtconfig.ClusterConfig) []metav1.StatusCause {

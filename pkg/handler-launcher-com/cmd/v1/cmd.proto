@@ -56,6 +56,19 @@ message HibernationRequest {
   HibernationAction action = 2;
   string statePath = 3;
   bool allowKernelMismatch = 4;
+  HibernationProtection protection = 5;
+}
+
+// Private identity is carried only over the node-local handler/launcher RPC.
+// Generated diagnostic formatters are redacted by hack/gen-proto.sh.
+message HibernationProtection {
+  string provider = 1;
+  string keyID = 2;
+  string recipient = 3;
+  bytes privateIdentity = 4;
+  bool consumptionCommitted = 5;
+  bool freshConsumption = 6;
+  bool keyErased = 7;
 }
 
 message HibernationResponse {

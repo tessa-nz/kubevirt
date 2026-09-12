@@ -145,3 +145,7 @@ func ServeVirtualMachineClones(resp http.ResponseWriter, req *http.Request, clus
 func ServePlugins(resp http.ResponseWriter, req *http.Request, clusterConfig *virtconfig.ClusterConfig) {
 	validating_webhooks.Serve(resp, req, admitters.NewPluginAdmitter(clusterConfig))
 }
+
+func ServeHibernationState(resp http.ResponseWriter, req *http.Request, virtCli kubecli.KubevirtClient, serviceAccounts map[string]struct{}) {
+	validating_webhooks.Serve(resp, req, &admitters.HibernationStateAdmitter{Client: virtCli, KubeVirtServiceAccounts: serviceAccounts})
+}

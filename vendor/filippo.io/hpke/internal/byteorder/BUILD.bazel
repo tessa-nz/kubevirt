@@ -1,0 +1,9 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["byteorder.go"],
+    importmap = "kubevirt.io/kubevirt/vendor/filippo.io/hpke/internal/byteorder",
+    importpath = "filippo.io/hpke/internal/byteorder",
+    visibility = ["//vendor/filippo.io/hpke:__subpackages__"],
+)

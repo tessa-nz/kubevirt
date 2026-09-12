@@ -1,0 +1,26 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "age.go",
+        "parse.go",
+        "pq.go",
+        "primitives.go",
+        "scrypt.go",
+        "x25519.go",
+    ],
+    importmap = "kubevirt.io/kubevirt/vendor/filippo.io/age",
+    importpath = "filippo.io/age",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/filippo.io/age/internal/bech32:go_default_library",
+        "//vendor/filippo.io/age/internal/format:go_default_library",
+        "//vendor/filippo.io/age/internal/stream:go_default_library",
+        "//vendor/filippo.io/hpke:go_default_library",
+        "//vendor/golang.org/x/crypto/chacha20poly1305:go_default_library",
+        "//vendor/golang.org/x/crypto/curve25519:go_default_library",
+        "//vendor/golang.org/x/crypto/hkdf:go_default_library",
+        "//vendor/golang.org/x/crypto/scrypt:go_default_library",
+    ],
+)
