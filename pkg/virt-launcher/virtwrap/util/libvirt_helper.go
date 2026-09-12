@@ -480,6 +480,19 @@ func configureQemuConf(qemuFilename string) (err error) {
 	}
 	defer util.CloseIOAndCheckErr(qemuConf, &err)
 
+	// Protected launchers disable core dumps before starting libvirt. Its
+	// default QEMU limit is unlimited, which cannot be raised above an
+	// inherited hard limit of zero by the non-root launcher.
+	var coreLimit unix.Rlimit
+	if err = unix.Getrlimit(unix.RLIMIT_CORE, &coreLimit); err != nil {
+		return err
+	}
+	if coreLimit.Max == 0 {
+		if _, err = qemuConf.WriteString("max_core = 0\n"); err != nil {
+			return err
+		}
+	}
+
 	// If hugepages exist, tell libvirt about them
 	_, err = os.Stat("/dev/hugepages")
 	if err == nil {

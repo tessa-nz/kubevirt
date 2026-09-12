@@ -7,9 +7,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/go-kit/log"
 	. "github.com/onsi/ginkgo/v2"
@@ -325,6 +327,26 @@ var _ = Describe("LibvirtHelper", func() {
 	})
 
 	Context("configureQemuConf()", func() {
+		It("should preserve a disabled hard core limit", func() {
+			// Lowering the hard limit cannot be undone. Isolate it from the suite.
+			if os.Getenv("KUBEVIRT_TEST_DISABLED_CORE_LIMIT") != "1" {
+				executable, err := os.Executable()
+				Expect(err).ToNot(HaveOccurred())
+				command := exec.Command(executable, "-test.run=TestUtil", "-ginkgo.focus=should preserve a disabled hard core limit")
+				command.Env = append(os.Environ(), "KUBEVIRT_TEST_DISABLED_CORE_LIMIT=1")
+				output, err := command.CombinedOutput()
+				Expect(err).ToNot(HaveOccurred(), string(output))
+				return
+			}
+			Expect(syscall.Setrlimit(syscall.RLIMIT_CORE, &syscall.Rlimit{Cur: 0, Max: 0})).To(Succeed())
+			confPath := filepath.Join(GinkgoT().TempDir(), "qemu.conf")
+			Expect(os.WriteFile(confPath, []byte("dummy = 1\n"), 0600)).To(Succeed())
+			Expect(configureQemuConf(confPath)).To(Succeed())
+			configuration, err := os.ReadFile(confPath)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(strings.Split(string(configuration), "\n")).To(ContainElement("max_core = 0"))
+		})
+
 		DescribeTable("should set shared_filesystem on qemu.conf according to env", func(envInput string, expected string) {
 			confPath := filepath.Join(GinkgoT().TempDir(), "qemu.conf")
 			file, err := os.Create(confPath)
