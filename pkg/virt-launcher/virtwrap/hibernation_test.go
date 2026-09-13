@@ -38,6 +38,8 @@ import (
 	v1 "kubevirt.io/api/core/v1"
 
 	"kubevirt.io/kubevirt/pkg/hibernation"
+	launchermetadata "kubevirt.io/kubevirt/pkg/virt-launcher/metadata"
+	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
 )
 
@@ -238,6 +240,9 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 		if path == statePath || !strings.HasPrefix(path, hibernation.StagingMountPath+"/") {
 			t.Fatal("libvirt received the mutable PVC path")
 		}
+		if uid, _ := manager.metadataCache.UID.Load(); uid != vmi.UID {
+			t.Fatalf("restore can publish a domain event with wrong VMI identity: got %q, want %q", uid, vmi.UID)
+		}
 		// Mutate the PVC after authentication and immediately before libvirt reads
 		// its image. Restore still sees the verified private plaintext copy.
 		if err := os.WriteFile(statePath, []byte("concurrent attacker replacement"), 0600); err != nil {
@@ -272,6 +277,21 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 	}
 	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state image remains after final erasure: %v", err)
+	}
+
+	// Finalized restores are reconciled through ListAllDomains. That path
+	// replaces libvirt XML metadata with the launcher's metadata cache.
+	connection.EXPECT().ListAllDomains(libvirt.CONNECT_LIST_DOMAINS_ACTIVE|libvirt.CONNECT_LIST_DOMAINS_INACTIVE).Return([]cli.VirDomain{domain}, nil)
+	domain.EXPECT().GetName().Return("default_tracer", nil)
+	domain.EXPECT().GetXMLDesc(libvirt.DomainXMLFlags(0)).Return(restoreXML, nil)
+	domain.EXPECT().GetState().Return(libvirt.DOMAIN_RUNNING, 0, nil)
+	domain.EXPECT().Free().Return(nil)
+	domains, err := manager.ListAllDomains()
+	if err != nil || len(domains) != 1 {
+		t.Fatalf("failed to list finalized restored domain: %v", err)
+	}
+	if domains[0].Spec.Metadata.KubeVirt.UID != vmi.UID || domains[0].Status.Status != api.Running {
+		t.Fatalf("finalized domain lost its running VMI identity: %+v", domains[0])
 	}
 }
 
@@ -452,7 +472,7 @@ func protectedHibernationManager(t *testing.T, connection cli.Connection) *Libvi
 	}
 	context := &cmdv1.HibernationProtection{Provider: protection.Provider, KeyID: "test-tpm-key", Recipient: identity.Recipient().String(), PrivateIdentity: []byte(identity.String()), ConsumptionCommitted: true, FreshConsumption: true, KeyErased: true}
 	t.Cleanup(func() { clear(context.PrivateIdentity) })
-	return &LibvirtDomainManager{virConn: connection, hibernationContext: context}
+	return &LibvirtDomainManager{virConn: connection, hibernationContext: context, metadataCache: launchermetadata.NewCache()}
 }
 
 func anchorHibernationFixture(t *testing.T, vmi *v1.VirtualMachineInstance, path string) {

@@ -44,6 +44,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/hibernation/protection"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/cli"
+	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter"
 	domainerrors "kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/errors"
 )
 
@@ -261,6 +262,13 @@ func (l *LibvirtDomainManager) restoreVMI(vmi *v1.VirtualMachineInstance, stateP
 	if overrideRequested {
 		kernelPair = fmt.Sprintf("%s[%s] -> %s[%s]", metadata.HostKernelRelease, metadata.KVMFingerprint, current.HostKernelRelease, current.KVMFingerprint)
 	}
+	// Notifications and ListAllDomains replace libvirt XML metadata with this
+	// cache. Initialize it before restore can emit an event, including retries
+	// that recover an already-restored paused domain.
+	l.metadataCache.UID.Set(vmi.UID)
+	l.metadataCache.GracePeriod.Set(
+		api.GracePeriodMetadata{DeletionGracePeriodSeconds: converter.GracePeriodSeconds(vmi)},
+	)
 	if domain, lookupErr := l.virConn.LookupDomainByName(api.VMINamespaceKeyFunc(vmi)); lookupErr == nil {
 		defer domain.Free()
 		state, _, stateErr := domain.GetState()
