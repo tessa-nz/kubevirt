@@ -91,11 +91,12 @@ func (c *VirtualMachineController) prepareHibernationProtection(client cmdclient
 			vmi.Annotations[hibernation.SourceNodeAnnotation] == "" || vmi.Annotations[hibernation.SourceNodeAnnotation] != c.host || vmi.IsRunning() {
 			return nil, fmt.Errorf("discard requires a cleanup-only VMI on the recorded source node")
 		}
-		domain, exists, err := client.GetDomain()
+		_, exists, err := client.GetDomain()
 		if err != nil {
 			return nil, err
 		}
-		if exists || domain != nil {
+		// GetDomain returns an allocated, empty object even when no domain exists.
+		if exists {
 			return nil, fmt.Errorf("discard requires an absent domain")
 		}
 		if err := c.hibernationKeys.Discard(attempt); err != nil {

@@ -368,7 +368,8 @@ func TestDiscardRequiresSourceNodeAndAbsentDomain(t *testing.T) {
 			keys := &fakeHibernationKeys{}
 			controller := &VirtualMachineController{BaseController: &BaseController{host: "source-node"}, hibernationKeys: keys}
 			if tc.source == "source-node" {
-				var domain *api.Domain
+				// Match the real RPC client, including its allocated absent-domain object.
+				domain := &api.Domain{}
 				if tc.domain {
 					domain = &api.Domain{Status: api.DomainStatus{Status: api.Paused}}
 				}
@@ -393,7 +394,7 @@ func TestDiscardRetriesLostLauncherReplyWithoutColdBoot(t *testing.T) {
 		hibernation.StateAnnotation: hibernation.StateDiscarding, hibernation.RequestAnnotation: hibernation.RequestDiscard,
 		hibernation.SourceNodeAnnotation: "source-node", hibernation.VMUIDAnnotation: "vm-uid", hibernation.AttemptAnnotation: "attempt",
 	}}}
-	client.EXPECT().GetDomain().Return(nil, false, nil).Times(2)
+	client.EXPECT().GetDomain().Return(&api.Domain{}, false, nil).Times(2)
 	gomock.InOrder(
 		client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE, gomock.Any(), false, gomock.Any()).Return(nil, context.DeadlineExceeded),
 		client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE, gomock.Any(), false, gomock.Any()).Return(&cmdv1.HibernationResponse{Response: &cmdv1.Response{Success: true}, Phase: hibernation.StateDiscarded, MetadataJson: []byte(`{"vmUID":"vm-uid","attemptID":"attempt","erasedAt":"now","discardedAt":"now"}`)}, nil),
