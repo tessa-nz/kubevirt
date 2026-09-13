@@ -1104,6 +1104,7 @@ rules:
   - virtualmachines/hibernate
   - virtualmachines/resume
   - virtualmachines/finalizehibernation
+  - virtualmachines/discardhibernation
   - virtualmachines/evacuate/cancel
   verbs:
   - update
