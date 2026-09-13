@@ -149,6 +149,109 @@ func TestSavingRetriesMissingVMIRequest(t *testing.T) {
 	}
 }
 
+func TestHibernationFinalVMIClosesInterruptedAttempt(t *testing.T) {
+	cases := []struct {
+		name, vmState, vmiState, request, outcome string
+	}{
+		{"save", hibernation.StateSaving, hibernation.StateSaving, hibernation.RequestHibernate, hibernation.StateSaveIncomplete},
+		{"restore-before-commit", hibernation.StateRestoring, hibernation.StateRestoring, hibernation.RequestResume, hibernation.StateResumeRejected},
+		{"restore-paused", hibernation.StateRestoring, hibernation.StateRestoredPaused, hibernation.RequestResume, hibernation.StateResumeRejected},
+		{"restore-commit-requested", hibernation.StateRestoreCommittedPaused, hibernation.StateRestoreCommittedPaused, hibernation.RequestResume, hibernation.StateRestoreCommitLost},
+		{"restore-consumed-receipt", hibernation.StateRestoring, hibernation.StateRunningAwaitingVerification, hibernation.RequestResume, hibernation.StateRestoreCommitLost},
+		{"restore-running", hibernation.StateRunningAwaitingVerification, hibernation.StateRunningAwaitingVerification, hibernation.RequestResume, hibernation.StateRestoreCommitLost},
+	}
+	for _, tc := range cases {
+		for _, phase := range []v1.VirtualMachineInstancePhase{v1.Failed, v1.Succeeded} {
+			t.Run(tc.name+"/"+string(phase), func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				client := kubecli.NewMockKubevirtClient(ctrl)
+				vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+				controller := &Controller{clientset: client}
+				vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{
+					hibernation.StateAnnotation: tc.vmState, hibernation.RequestAnnotation: tc.request, hibernation.AttemptAnnotation: "attempt",
+				}}}
+				vmi := &v1.VirtualMachineInstance{
+					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{
+						hibernation.StateAnnotation: tc.vmiState, hibernation.AttemptAnnotation: "attempt",
+					}},
+					Status: v1.VirtualMachineInstanceStatus{Phase: phase},
+				}
+				if tc.vmState == hibernation.StateSaving {
+					vmi.Annotations[hibernation.RequestAnnotation] = hibernation.RequestSave
+				}
+				client.EXPECT().VirtualMachine("default").Return(vmClient)
+				vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+					if updated.Annotations[hibernation.StateAnnotation] != tc.outcome || updated.Annotations[hibernation.RequestAnnotation] != "" || updated.Annotations[hibernation.ErrorAnnotation] == "" {
+						t.Fatalf("dead VMI did not close the attempt: %+v", updated.Annotations)
+					}
+					return updated, nil
+				})
+				_, _, handled, err := controller.reconcileHibernation(vm, vmi)
+				if !handled || err != nil {
+					t.Fatalf("handled=%v err=%v", handled, err)
+				}
+			})
+		}
+	}
+}
+
+func TestHibernationFinalSavePreservesCompletedReceipt(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := kubecli.NewMockKubevirtClient(ctrl)
+	vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+	controller := &Controller{clientset: client}
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{
+		hibernation.StateAnnotation: hibernation.StateSaving, hibernation.AttemptAnnotation: "attempt",
+	}}}
+	vmi := &v1.VirtualMachineInstance{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			hibernation.StateAnnotation: hibernation.StateHibernated, hibernation.AttemptAnnotation: "attempt", hibernation.ArtifactDigestAnnotation: "artifact-digest",
+		}},
+		Status: v1.VirtualMachineInstanceStatus{Phase: v1.Succeeded},
+	}
+	client.EXPECT().VirtualMachine("default").Return(vmClient)
+	vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+		if updated.Annotations[hibernation.StateAnnotation] != hibernation.StateHibernated || updated.Annotations[hibernation.ArtifactDigestAnnotation] != "artifact-digest" {
+			t.Fatalf("completed save receipt was lost: %+v", updated.Annotations)
+		}
+		return updated, nil
+	})
+	_, _, handled, err := controller.reconcileHibernation(vm, vmi)
+	if !handled || err != nil {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+}
+
+func TestHibernationFinalVMIPreservesCompletedFinalization(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := kubecli.NewMockKubevirtClient(ctrl)
+	vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+	vmiClient := kubecli.NewMockVirtualMachineInstanceInterface(ctrl)
+	controller := &Controller{clientset: client}
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{
+		hibernation.StateAnnotation: hibernation.StateRunningAwaitingVerification, hibernation.RequestAnnotation: hibernation.RequestFinalize,
+	}}}
+	vmi := &v1.VirtualMachineInstance{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{
+			hibernation.StateAnnotation: hibernation.StateRunning,
+		}},
+		Status: v1.VirtualMachineInstanceStatus{Phase: v1.Succeeded},
+	}
+	client.EXPECT().VirtualMachine("default").Return(vmClient)
+	vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+		if updated.Annotations[hibernation.StateAnnotation] != hibernation.StateRunning || updated.Annotations[hibernation.RequestAnnotation] != "" {
+			t.Fatalf("completed finalization was lost: %+v", updated.Annotations)
+		}
+		return updated, nil
+	})
+	client.EXPECT().VirtualMachineInstance("default").Return(vmiClient)
+	vmiClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).Return(vmi, nil)
+	_, _, handled, err := controller.reconcileHibernation(vm, vmi)
+	if !handled || err != nil {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+}
+
 func TestArtifactErasureRequiresExplicitFinalization(t *testing.T) {
 	if shouldFinalizeHibernation(hibernation.RequestResume) {
 		t.Fatal("generic resume must not erase the consumed recovery artifact")

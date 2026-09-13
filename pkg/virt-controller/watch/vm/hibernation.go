@@ -93,6 +93,16 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 			updated, err := c.updateVMHibernation(vm, hibernation.StateSaveIncomplete, "", "", "launcher disappeared before save completion")
 			return updated, vmi, true, err
 		}
+		vmiState, vmiMessage := vmiHibernationOutcome(vmi)
+		// A failed launcher remains as a final VMI object after node loss. The
+		// ordinary run-strategy cleanup is suppressed during hibernation, so
+		// classify it here instead of waiting forever for a nil VMI. A completed
+		// receipt from this attempt still wins: saving normally stops QEMU.
+		if vmi.IsFinal() && !(vmi.Annotations[hibernation.AttemptAnnotation] == vm.Annotations[hibernation.AttemptAnnotation] &&
+			vmiState == hibernation.StateHibernated && vmi.Annotations[hibernation.ArtifactDigestAnnotation] != "") {
+			updated, err := c.updateVMHibernation(vm, hibernation.StateSaveIncomplete, "", "", "launcher terminated before save completion")
+			return updated, vmi, true, err
+		}
 		if vmi.Annotations[hibernation.AttemptAnnotation] != vm.Annotations[hibernation.AttemptAnnotation] ||
 			(vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateSaving && needsSaveDispatch(vm, vmi)) {
 			pvcIdentities := map[string]string{}
@@ -102,7 +112,6 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 			updatedVMI, err := c.updateVMIHibernation(vmi, hibernation.RequestSave, hibernation.StateSaving, vm.Annotations[hibernation.AttemptAnnotation], vm, pvcIdentities)
 			return vm, updatedVMI, true, err
 		}
-		vmiState, vmiMessage := vmiHibernationOutcome(vmi)
 		if vmiState == hibernation.StateSaveRejected || (vmiState == hibernation.StateRunning && vmi.Annotations[hibernation.RequestAnnotation] == "") {
 			// The launcher rejected the request before changing the running
 			// domain. Finish the VM update even if an earlier reconciliation
@@ -187,6 +196,15 @@ func (c *Controller) reconcileResume(vm *virtv1.VirtualMachine, vmi *virtv1.Virt
 	vmiState, vmiMessage := vmiHibernationOutcome(vmi)
 	if hibernation.IsTerminal(vmiState) {
 		updated, err := c.updateVMHibernation(vm, vmiState, "", "", vmiMessage)
+		return updated, vmi, true, err
+	}
+	if vmi.IsFinal() && !(state == hibernation.StateRunningAwaitingVerification && request == hibernation.RequestFinalize && vmiState == hibernation.StateRunning) {
+		terminal := hibernation.StateResumeRejected
+		if state == hibernation.StateRestoreCommittedPaused || state == hibernation.StateRunningAwaitingVerification ||
+			vmiState == hibernation.StateRestoreCommittedPaused || vmiState == hibernation.StateRunningAwaitingVerification {
+			terminal = hibernation.StateRestoreCommitLost
+		}
+		updated, err := c.updateVMHibernation(vm, terminal, "", "", "restore launcher terminated")
 		return updated, vmi, true, err
 	}
 	switch vmiState {
