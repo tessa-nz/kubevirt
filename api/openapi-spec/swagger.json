@@ -9805,6 +9805,61 @@
      }
     ]
    },
+   "/apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachines/{name}/discardhibernation": {
+    "put": {
+     "description": "Permanently discard a failed hibernation attempt identified by attemptID; leave the VM halted.",
+     "consumes": [
+      "*/*"
+     ],
+     "operationId": "v1discardhibernation",
+     "parameters": [
+      {
+       "name": "body",
+       "in": "body",
+       "required": true,
+       "schema": {
+        "$ref": "#/definitions/v1.DiscardHibernationOptions"
+       }
+      }
+     ],
+     "responses": {
+      "202": {
+       "description": "Accepted",
+       "schema": {
+        "type": "string"
+       }
+      },
+      "400": {
+       "description": "Bad Request",
+       "schema": {
+        "type": "string"
+       }
+      },
+      "401": {
+       "description": "Unauthorized"
+      },
+      "409": {
+       "description": "Conflict",
+       "schema": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "uniqueItems": true,
+      "type": "string",
+      "description": "Name of the resource",
+      "name": "name",
+      "in": "path",
+      "required": true
+     },
+     {
+      "$ref": "#/parameters/namespace-nfszEHZ0"
+     }
+    ]
+   },
    "/apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachines/{name}/evacuate/cancel": {
     "put": {
      "description": "Cancel evacuation Virtual Machine",
@@ -11801,6 +11856,61 @@
      }
     ]
    },
+   "/apis/subresources.kubevirt.io/v1alpha3/namespaces/{namespace}/virtualmachines/{name}/discardhibernation": {
+    "put": {
+     "description": "Permanently discard a failed hibernation attempt identified by attemptID; leave the VM halted.",
+     "consumes": [
+      "*/*"
+     ],
+     "operationId": "v1alpha3discardhibernation",
+     "parameters": [
+      {
+       "name": "body",
+       "in": "body",
+       "required": true,
+       "schema": {
+        "$ref": "#/definitions/v1.DiscardHibernationOptions"
+       }
+      }
+     ],
+     "responses": {
+      "202": {
+       "description": "Accepted",
+       "schema": {
+        "type": "string"
+       }
+      },
+      "400": {
+       "description": "Bad Request",
+       "schema": {
+        "type": "string"
+       }
+      },
+      "401": {
+       "description": "Unauthorized"
+      },
+      "409": {
+       "description": "Conflict",
+       "schema": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "uniqueItems": true,
+      "type": "string",
+      "description": "Name of the resource",
+      "name": "name",
+      "in": "path",
+      "required": true
+     },
+     {
+      "$ref": "#/parameters/namespace-nfszEHZ0"
+     }
+    ]
+   },
    "/apis/subresources.kubevirt.io/v1alpha3/namespaces/{namespace}/virtualmachines/{name}/evacuate/cancel": {
     "put": {
      "description": "Cancel evacuation Virtual Machine",
@@ -12580,7 +12690,7 @@
    "/healthz": {
     "get": {
      "description": "Health endpoint",
-     "operationId": "func1",
+     "operationId": "func17",
      "responses": {
       "401": {
        "description": "Unauthorized"
@@ -15209,6 +15319,37 @@
    },
    "v1.DisableSerialConsoleLog": {
     "type": "object"
+   },
+   "v1.DiscardHibernationOptions": {
+    "description": "DiscardHibernationOptions permanently abandons one failed hibernation attempt.",
+    "type": "object",
+    "required": [
+     "attemptID"
+    ],
+    "properties": {
+     "apiVersion": {
+      "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+      "type": "string"
+     },
+     "attemptID": {
+      "description": "AttemptID must match the current failed attempt. This prevents delayed requests from discarding a newer attempt.",
+      "type": "string",
+      "default": ""
+     },
+     "dryRun": {
+      "description": "When present, modifications are not persisted. The only valid value is All.",
+      "type": "array",
+      "items": {
+       "type": "string",
+       "default": ""
+      },
+      "x-kubernetes-list-type": "atomic"
+     },
+     "kind": {
+      "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+      "type": "string"
+     }
+    }
    },
    "v1.Disk": {
     "type": "object",

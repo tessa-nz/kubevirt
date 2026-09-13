@@ -27,7 +27,7 @@ type ResourceRendererOption func(renderer *ResourceRenderer)
 // cluster memory overcommit is configured.
 func withHibernationMemory(vmi *v1.VirtualMachineInstance, overhead resource.Quantity) ResourceRendererOption {
 	return func(renderer *ResourceRenderer) {
-		if vmi.Annotations[hibernation.StatePVCAnnotation] == "" {
+		if vmi.Annotations[hibernation.StatePVCAnnotation] == "" || vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarding {
 			return
 		}
 		required := hibernation.StateCapacity(vmi)

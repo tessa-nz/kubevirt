@@ -53,7 +53,11 @@ const (
 	RequestHibernate     = "hibernate"
 	RequestResume        = "resume"
 	RequestFinalize      = "finalize"
+	RequestDiscard       = "discard"
 
+	SourceNodeAnnotation             = "hibernation.kubevirt.io/source-node"
+	StateDiscarding                  = "Discarding"
+	StateDiscarded                   = "Discarded"
 	StateRunning                     = "Running"
 	StateSaving                      = "Saving"
 	StateHibernated                  = "Hibernated"
@@ -99,6 +103,7 @@ type Metadata struct {
 	CompletedAt         string            `json:"completedAt"`
 	ConsumedAt          string            `json:"consumedAt,omitempty"`
 	ErasedAt            string            `json:"erasedAt,omitempty"`
+	DiscardedAt         string            `json:"discardedAt,omitempty"`
 	ValidatedKernelPair string            `json:"validatedKernelPair,omitempty"`
 	OverrideAttempted   bool              `json:"compatibilityOverrideAttempted,omitempty"`
 	OverrideKernel      string            `json:"compatibilityOverrideKernel,omitempty"`

@@ -550,11 +550,16 @@ func (app *virtAPIApp) composeSubresources() {
 			{"hibernate", subresourceApp.HibernateVMRequestHandler, "Save a VirtualMachine for a planned host restart."},
 			{"resume", subresourceApp.ResumeVMRequestHandler, "Resume a hibernated VirtualMachine."},
 			{"finalizehibernation", subresourceApp.FinalizeHibernationVMRequestHandler, "Finalize an operator-verified hibernation resume."},
+			{"discardhibernation", subresourceApp.DiscardHibernationVMRequestHandler, "Permanently discard a failed hibernation attempt identified by attemptID; leave the VM halted."},
 		} {
+			var options interface{} = metav1.UpdateOptions{}
+			if operation.name == "discardhibernation" {
+				options = v1.DiscardHibernationOptions{}
+			}
 			subws.Route(subws.PUT(definitions.NamespacedResourcePath(subresourcesvmGVR)+definitions.SubResourcePath(operation.name)).
 				To(operation.handler).
 				Consumes(mime.MIME_ANY).
-				Reads(metav1.UpdateOptions{}).
+				Reads(options).
 				Param(definitions.NamespaceParam(subws)).Param(definitions.NameParam(subws)).
 				Operation(version.Version+operation.name).
 				Doc(operation.description).
@@ -685,6 +690,7 @@ func (app *virtAPIApp) composeSubresources() {
 					{Name: "virtualmachines/hibernate", Namespaced: true, Verbs: metav1.Verbs{"update"}},
 					{Name: "virtualmachines/resume", Namespaced: true, Verbs: metav1.Verbs{"update"}},
 					{Name: "virtualmachines/finalizehibernation", Namespaced: true, Verbs: metav1.Verbs{"update"}},
+					{Name: "virtualmachines/discardhibernation", Namespaced: true, Verbs: metav1.Verbs{"update"}},
 					{
 						Name:       "expand-vm-spec",
 						Namespaced: true,

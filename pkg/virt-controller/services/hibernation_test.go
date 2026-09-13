@@ -58,6 +58,14 @@ func TestHibernationStatePVCIsMountedOnlyInLauncher(t *testing.T) {
 	if staging == nil || staging.Medium != k8sv1.StorageMediumMemory || staging.SizeLimit == nil || renderer.podVolumeMounts[1].MountPath != hibernation.StagingMountPath {
 		t.Fatal("plaintext staging is not a bounded memory-only launcher volume")
 	}
+	vmi.Annotations[hibernation.StateAnnotation] = hibernation.StateDiscarding
+	cleanup := &VolumeRenderer{}
+	if err := withHibernationState(vmi, store)(cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if len(cleanup.podVolumes) != 2 || cleanup.podVolumes[1].EmptyDir.Medium != k8sv1.StorageMediumMemory || cleanup.podVolumes[1].EmptyDir.SizeLimit.Value() != 1024*1024 {
+		t.Fatal("cleanup staging is missing or reserves guest memory")
+	}
 }
 
 func TestHibernationMemoryCannotBeOvercommitted(t *testing.T) {

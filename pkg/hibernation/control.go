@@ -46,5 +46,5 @@ func ControlChanged(old, current map[string]string, allowStatePVC bool) bool {
 
 func Active(annotations map[string]string) bool {
 	state := annotations[StateAnnotation]
-	return annotations[RequestAnnotation] != "" || (state != "" && state != StateRunning)
+	return annotations[RequestAnnotation] != "" || (state != "" && state != StateRunning && state != StateDiscarded)
 }

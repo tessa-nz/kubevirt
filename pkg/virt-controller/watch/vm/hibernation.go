@@ -41,6 +41,16 @@ func (c *Controller) reconcileHibernation(vm *virtv1.VirtualMachine, vmi *virtv1
 	if request == "" && state == "" {
 		return vm, vmi, false, nil
 	}
+	if request == hibernation.RequestDiscard || state == hibernation.StateDiscarding {
+		return c.reconcileDiscard(vm, vmi)
+	}
+	if state == hibernation.StateDiscarded && request == "" {
+		if vmi != nil && vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarded && vmi.Annotations[hibernation.AttemptAnnotation] == vm.Annotations[hibernation.AttemptAnnotation] {
+			updated, err := c.stopVMI(vm, vmi)
+			return updated, vmi, true, err
+		}
+		return vm, vmi, false, nil
+	}
 	if retryRejectedRestore(state, request, vmi) {
 		updated, err := c.updateVMHibernation(vm, hibernation.StateRestoring, request, vm.Annotations[hibernation.AttemptAnnotation], "")
 		if err != nil {
@@ -66,6 +76,91 @@ func (c *Controller) reconcileHibernation(vm *virtv1.VirtualMachine, vmi *virtv1
 	default:
 		return vm, vmi, true, fmt.Errorf("unsupported hibernation request %q", request)
 	}
+}
+
+// Discard uses the ordinary launcher lifecycle, with guest startup suppressed.
+// Its receipt remains bound to the original attempt until the cleanup VMI is gone.
+func (c *Controller) reconcileDiscard(vm *virtv1.VirtualMachine, vmi *virtv1.VirtualMachineInstance) (*virtv1.VirtualMachine, *virtv1.VirtualMachineInstance, bool, error) {
+	state := vm.Annotations[hibernation.StateAnnotation]
+	if vm.Annotations[hibernation.AttemptAnnotation] == "" || vm.Annotations[hibernation.VMUIDAnnotation] != string(vm.UID) {
+		return vm, vmi, true, fmt.Errorf("discard requires the recorded VM and attempt identity")
+	}
+	if state != hibernation.StateDiscarding {
+		if !hibernation.IsTerminal(state) || vmi != nil {
+			return vm, vmi, true, fmt.Errorf("discard requires a failed attempt without its previous VMI")
+		}
+		if len(vm.Status.StateChangeRequests) != 0 || vm.Status.SnapshotInProgress != nil {
+			return vm, vmi, true, fmt.Errorf("discard conflicts with pending lifecycle work")
+		}
+		if err := c.validateDiscardStorage(vm); err != nil {
+			return vm, vmi, true, err
+		}
+		if vm.Annotations[hibernation.SourceNodeAnnotation] == "" {
+			// Older attempts predate the source-node annotation. Accept only their
+			// frozen, single-host selector; never infer the node from mutable PVC data.
+			if vm.Spec.Template == nil || vm.Spec.Template.Spec.NodeSelector[k8score.LabelHostname] == "" {
+				return vm, vmi, true, fmt.Errorf("legacy discard requires a fixed source hostname selector")
+			}
+			hostname := vm.Spec.Template.Spec.NodeSelector[k8score.LabelHostname]
+			nodes, err := c.clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{LabelSelector: k8score.LabelHostname + "=" + hostname})
+			if err != nil {
+				return vm, vmi, true, err
+			}
+			if len(nodes.Items) != 1 {
+				return vm, vmi, true, fmt.Errorf("source hostname must identify exactly one node")
+			}
+			vm.Annotations[hibernation.SourceNodeAnnotation] = nodes.Items[0].Name
+		}
+		halted := virtv1.RunStrategyHalted
+		vm.Spec.Running = nil
+		vm.Spec.RunStrategy = &halted
+		updated, err := c.updateVMHibernation(vm, hibernation.StateDiscarding, hibernation.RequestDiscard, "", "")
+		return updated, vmi, true, err
+	}
+	if vmi == nil {
+		if err := c.validateDiscardStorage(vm); err != nil {
+			return vm, vmi, true, err
+		}
+		updated, err := c.startVMI(vm)
+		return updated, vmi, true, err
+	}
+	if vmi.Annotations[hibernation.AttemptAnnotation] != vm.Annotations[hibernation.AttemptAnnotation] || vmi.Annotations[hibernation.VMUIDAnnotation] != string(vm.UID) || vmi.Annotations[hibernation.SourceNodeAnnotation] != vm.Annotations[hibernation.SourceNodeAnnotation] {
+		return vm, vmi, true, fmt.Errorf("cleanup VMI does not belong to the current attempt and source node")
+	}
+	outcome, _ := vmiHibernationOutcome(vmi)
+	if outcome == hibernation.StateDiscarded {
+		// Record completion before removing the VMI. Reconciliation can then
+		// finish even if its deletion succeeds but the following VM update is lost.
+		updated, err := c.updateVMHibernation(vm, hibernation.StateDiscarded, "", "", "")
+		return updated, vmi, true, err
+	}
+	if vmi.IsFinal() {
+		updated, err := c.stopVMI(vm, vmi)
+		return updated, vmi, true, err
+	}
+	return vm, vmi, true, nil
+}
+
+func (c *Controller) validateDiscardStorage(vm *virtv1.VirtualMachine) error {
+	obj, exists, err := c.pvcStore.GetByKey(vm.Namespace + "/" + vm.Annotations[hibernation.StatePVCAnnotation])
+	if err != nil {
+		return err
+	}
+	pvc, ok := obj.(*k8score.PersistentVolumeClaim)
+	if !exists || !ok || !hibernation.StatePVCBoundTo(pvc, vm.UID) {
+		return fmt.Errorf("discard state PVC is not exclusively reserved for this VM")
+	}
+	recorded := map[string]string{}
+	if err := json.Unmarshal([]byte(vm.Annotations[hibernation.PVCIdentitiesAnnotation]), &recorded); err != nil {
+		return err
+	}
+	if pvc.UID == "" || pvc.Spec.VolumeName == "" || recorded["state"] != string(pvc.UID)+"/"+pvc.Spec.VolumeName {
+		return fmt.Errorf("discard state PVC identity changed")
+	}
+	if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == k8score.PersistentVolumeBlock {
+		return fmt.Errorf("discard state PVC must be a filesystem")
+	}
+	return nil
 }
 
 func retryRejectedRestore(state, request string, vmi *virtv1.VirtualMachineInstance) bool {
@@ -142,7 +237,7 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 		}
 
 		return vm, vmi, true, nil
-	case "", hibernation.StateRunning:
+	case "", hibernation.StateRunning, hibernation.StateDiscarded:
 		if request == "" {
 			return vm, vmi, false, nil
 		}
@@ -152,6 +247,10 @@ func (c *Controller) reconcileHibernate(vm *virtv1.VirtualMachine, vmi *virtv1.V
 		if vmi.Annotations[hibernation.StatePVCAnnotation] != vm.Annotations[hibernation.StatePVCAnnotation] {
 			return vm, vmi, true, fmt.Errorf("state PVC was not mounted before launcher creation; a newly created launcher must include %s", hibernation.StatePVCAnnotation)
 		}
+		if vmi.Status.NodeName == "" {
+			return vm, vmi, true, fmt.Errorf("save requires the source node identity")
+		}
+		vm.Annotations[hibernation.SourceNodeAnnotation] = vmi.Status.NodeName
 		attempt := string(uuid.NewUUID())
 		pvcIdentities, err := c.hibernationPVCIdentities(vm)
 		if err != nil {
@@ -276,6 +375,7 @@ func (c *Controller) updateVMIHibernation(vmi *virtv1.VirtualMachineInstance, re
 	copy.Annotations[hibernation.StateAnnotation] = state
 	copy.Annotations[hibernation.AttemptAnnotation] = attempt
 	copy.Annotations[hibernation.VMUIDAnnotation] = string(vm.UID)
+	copy.Annotations[hibernation.SourceNodeAnnotation] = vm.Annotations[hibernation.SourceNodeAnnotation]
 	payload, err := json.Marshal(pvcIdentities)
 	if err != nil {
 		return vmi, err

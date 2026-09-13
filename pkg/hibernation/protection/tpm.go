@@ -379,10 +379,14 @@ func (s *TPMStore) Consume(attempt Attempt) (fresh bool, err error) {
 	return fresh, err
 }
 
-func (s *TPMStore) Destroy(attempt Attempt) error { return s.destroy(attempt, false) }
-func (s *TPMStore) Abandon(attempt Attempt) error { return s.destroy(attempt, true) }
+func (s *TPMStore) Destroy(attempt Attempt) error { return s.destroy(attempt, "finalize") }
+func (s *TPMStore) Abandon(attempt Attempt) error { return s.destroy(attempt, "abandon") }
 
-func (s *TPMStore) destroy(attempt Attempt, unconsumed bool) error {
+// Discard is reserved for an explicit abandoned attempt with no guest domain.
+// It accepts either consumption state and retries partially completed deletion.
+func (s *TPMStore) Discard(attempt Attempt) error { return s.destroy(attempt, "discard") }
+
+func (s *TPMStore) destroy(attempt Attempt, operation string) error {
 	return s.transaction(attempt, func(a *tpmAttempt) error {
 		pub, keyErr := a.keyPublic()
 		if keyErr != nil && !errors.Is(keyErr, ErrMissing) {
@@ -399,10 +403,10 @@ func (s *TPMStore) destroy(attempt Attempt, unconsumed bool) error {
 		if err != nil {
 			return err
 		}
-		if !consumed && !unconsumed {
+		if !consumed && operation == "finalize" {
 			return ErrUnconsumed
 		}
-		if consumed && unconsumed {
+		if consumed && operation == "abandon" {
 			return ErrConsumed
 		}
 		// Delete and read back the sealed object before removing its NV record.

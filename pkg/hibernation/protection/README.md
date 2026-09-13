@@ -6,10 +6,11 @@ a private memory-backed copy before libvirt reads it. A persistent TPM NV
 record commits consumption before unpause; removing the persistent key and
 verifying its absence completes cryptographic erasure.
 
-This is source implementation with emulator and mocked-libvirt test evidence.
-Hardware TPM qualification and a guest campaign using newly built images are
-required before deployment. Existing tracer image locks do not include it.
-The guest TPM, guest encryption setup, and guest unlock keys are unchanged.
+Qualification is revision-specific: use the corresponding image lock and guest
+results in the Orion lab. Emulator and mocked-libvirt tests alone do not qualify
+a deployment image. Hardware TPM and target guest-size qualification are
+required before production. The guest TPM, guest encryption setup, and guest
+unlock keys are unchanged.
 
 ## Node and namespace requirements
 
@@ -80,6 +81,42 @@ never permits a second unpause. Finalization requires the current running,
 Ready VMI and a freshly observed running domain before destroying the key.
 Interrupted key destruction is retryable. Never clear a TPM to recover an
 attempt; doing so can destroy unrelated keys and the last resumable state.
+
+## Discarding a failed attempt
+
+`PUT /apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachines/{name}/discardhibernation`
+accepts `{"attemptID":"the-current-attempt-id"}` and optional `"dryRun":["All"]`.
+It requires the Hibernation gate and the `virtualmachines/discardhibernation`
+update permission. Only `SaveIncomplete`, `ResumeRejected`, and
+`RestoreCommitLost` may be discarded, after the previous VMI is absent.
+Discarding `ResumeRejected` permanently gives up its possible recovery.
+A missing or stale attempt ID is rejected; repeating the same pending or
+completed request is safe.
+
+The controller verifies the original reserved state PVC, binds cleanup to the
+recorded source node, and moves the VM to `Discarding` with `runStrategy: Halted`.
+Older attempts without a recorded source node require a frozen single-host
+node selector that resolves to exactly one node. Otherwise cleanup stops for
+operator investigation; it never guesses a node from the state files.
+A small cleanup VMI mounts only the state PVC and cannot boot, restore, or
+attach guest disks. It does not require the guest's memory allocation or
+DataVolumes. Its protected server retains a small tmpfs and no-swap checks.
+
+With no guest domain present, the handler destroys the matching TPM key and NV
+record, accepting either unused or consumed state. Key and NV identity checks,
+node binding, the shared transaction lock, and deletion readback remain in
+force. The launcher then removes ciphertext and interrupted publication files
+from the exclusively reserved slot and writes a nonsecret erasure receipt.
+Unknown TPM or filesystem outcomes retain `Discarding` for retry, including
+after launcher/controller replacement or a node reboot. The controller accepts
+only a receipt for the exact current attempt and then removes the cleanup VMI.
+
+Completion is `Discarded`, with the VM still halted. An explicit normal start
+can cold-boot the guest later; it cannot recover the abandoned RAM or guest
+unlock keys. A later hibernation uses a new attempt ID. The `discardedAt` receipt
+does not claim that a successful resume occurred. Discard never clears the TPM
+or deletes the VM, state PVC, or guest disks. Physical TPM erasure and power-loss
+qualification remain separate from the emulator and local guest tests.
 
 ## Development checks
 

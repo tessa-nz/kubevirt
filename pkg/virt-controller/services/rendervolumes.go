@@ -73,6 +73,11 @@ func withHibernationState(vmi *v1.VirtualMachineInstance, pvcStore cache.Store) 
 			Name: hibernation.StateVolumeName, MountPath: hibernation.StateMountPath,
 		})
 		capacity := hibernation.StateCapacity(vmi)
+		if vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarding {
+			// Keep the protected server's tmpfs requirement, without reserving
+			// a guest-sized save buffer for an operation that cannot save RAM.
+			capacity = resource.MustParse("1Mi")
+		}
 		renderer.podVolumes = append(renderer.podVolumes, k8sv1.Volume{
 			Name:         hibernation.StagingVolumeName,
 			VolumeSource: k8sv1.VolumeSource{EmptyDir: &k8sv1.EmptyDirVolumeSource{Medium: k8sv1.StorageMediumMemory, SizeLimit: &capacity}},

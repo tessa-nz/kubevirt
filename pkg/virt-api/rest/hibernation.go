@@ -47,6 +47,10 @@ func (app *SubresourceAPIApp) FinalizeHibernationVMRequestHandler(request *restf
 	app.hibernationRequest(request, response, hibernation.RequestFinalize)
 }
 
+func (app *SubresourceAPIApp) DiscardHibernationVMRequestHandler(request *restful.Request, response *restful.Response) {
+	app.hibernationRequest(request, response, hibernation.RequestDiscard)
+}
+
 func (app *SubresourceAPIApp) hibernationRequest(request *restful.Request, response *restful.Response, operation string) {
 	if !app.clusterConfig.HibernationEnabled() {
 		writeError(errors.NewBadRequest("Hibernation feature gate is not enabled"), response)
@@ -63,9 +67,21 @@ func (app *SubresourceAPIApp) hibernationRequest(request *restful.Request, respo
 		return
 	}
 	options := &metav1.UpdateOptions{}
+	var body interface{} = options
+	discard := &v1.DiscardHibernationOptions{}
+	if operation == hibernation.RequestDiscard {
+		body = discard
+	}
 	if request.Request.Body != nil {
-		if err := decodeBody(request, options); err != nil {
+		if err := decodeBody(request, body); err != nil {
 			writeError(err, response)
+			return
+		}
+	}
+	if operation == hibernation.RequestDiscard {
+		options = &metav1.UpdateOptions{DryRun: discard.DryRun}
+		if discard.AttemptID == "" || discard.AttemptID != vm.Annotations[hibernation.AttemptAnnotation] {
+			writeError(errors.NewConflict(v1.Resource("virtualmachine"), name, fmt.Errorf("discard requires the current attemptID")), response)
 			return
 		}
 	}
@@ -87,7 +103,7 @@ func (app *SubresourceAPIApp) hibernationRequest(request *restful.Request, respo
 			return
 		}
 	}
-	if vm.Annotations[hibernation.RequestAnnotation] == operation {
+	if vm.Annotations[hibernation.RequestAnnotation] == operation || (operation == hibernation.RequestDiscard && vm.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarded) {
 		response.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -120,7 +136,7 @@ func validateHibernationRequest(vm *v1.VirtualMachine, vmi *v1.VirtualMachineIns
 		if metav1.GetControllerOf(vm) != nil {
 			return fmt.Errorf("hibernation requires an independently managed VM")
 		}
-		if state != "" && state != hibernation.StateRunning && !(state == hibernation.StateSaving && request == operation) {
+		if state != "" && state != hibernation.StateRunning && state != hibernation.StateDiscarded && !(state == hibernation.StateSaving && request == operation) {
 			return fmt.Errorf("cannot hibernate from state %q", state)
 		}
 		if len(vm.Status.StateChangeRequests) != 0 || vm.Status.SnapshotInProgress != nil {
@@ -149,6 +165,19 @@ func validateHibernationRequest(vm *v1.VirtualMachine, vmi *v1.VirtualMachineIns
 		}
 		if vm.Annotations[hibernation.ArtifactDigestAnnotation] == "" {
 			return fmt.Errorf("resume requires a controller-recorded artifact digest")
+		}
+	case hibernation.RequestDiscard:
+		if !hibernation.IsTerminal(state) && state != hibernation.StateDiscarding && state != hibernation.StateDiscarded {
+			return fmt.Errorf("discard requires a failed hibernation attempt")
+		}
+		if len(vm.Status.StateChangeRequests) != 0 || vm.Status.SnapshotInProgress != nil {
+			return fmt.Errorf("discard cannot overlap a pending lifecycle or snapshot operation")
+		}
+		if vmi != nil && !(((state == hibernation.StateDiscarding && request == operation) || state == hibernation.StateDiscarded) &&
+			vmi.Annotations[hibernation.AttemptAnnotation] == vm.Annotations[hibernation.AttemptAnnotation] &&
+			vmi.Annotations[hibernation.VMUIDAnnotation] == string(vm.UID) &&
+			(vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarding || vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarded) && !vmi.IsRunning()) {
+			return fmt.Errorf("discard requires the previous VMI to be absent")
 		}
 	case hibernation.RequestFinalize:
 		if state != hibernation.StateRunningAwaitingVerification || vmi == nil || !vmi.IsRunning() {

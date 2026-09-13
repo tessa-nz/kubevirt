@@ -116,14 +116,14 @@ func (admitter *VMsAdmitter) Admit(ctx context.Context, ar *admissionv1.Admissio
 	if !trustedHibernationWriter && hibernation.ControlChanged(oldVM.Annotations, vm.Annotations, !hibernation.Active(oldVM.Annotations)) {
 		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
 			Type:    metav1.CauseTypeFieldValueNotSupported,
-			Message: "use the hibernate, resume, and finalizehibernation subresources to manage hibernation",
+			Message: "use the hibernate, resume, finalizehibernation, and discardhibernation subresources to manage hibernation",
 			Field:   "metadata.annotations",
 		}})
 	}
 	if (hibernation.Active(oldVM.Annotations) || oldVM.Annotations[hibernation.StatePVCAnnotation] != "") && !equality.Semantic.DeepEqual(oldVM.OwnerReferences, vm.OwnerReferences) {
 		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{Type: metav1.CauseTypeFieldValueNotSupported, Message: "ownership is immutable while hibernation state is configured", Field: "metadata.ownerReferences"}})
 	}
-	if hibernation.Active(oldVM.Annotations) && !equality.Semantic.DeepEqual(oldVM.Spec, vm.Spec) {
+	if hibernation.Active(oldVM.Annotations) && !equality.Semantic.DeepEqual(oldVM.Spec, vm.Spec) && !isDiscardHalt(oldVM, &vm, trustedHibernationWriter) {
 		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
 			Type:    metav1.CauseTypeFieldValueNotSupported,
 			Message: "VM specification is immutable while a hibernation attempt is active",
@@ -487,4 +487,21 @@ func (admitter *VMsAdmitter) validateVolumeRequests(ctx context.Context, vm *v1.
 
 	return nil, nil
 
+}
+
+// Only the controller-accepted discard transition may halt an active VM.
+// All disk, memory, node, and other specification fields remain frozen.
+func isDiscardHalt(old, current *v1.VirtualMachine, trusted bool) bool {
+	if !trusted || !hibernation.IsTerminal(old.Annotations[hibernation.StateAnnotation]) ||
+		old.Annotations[hibernation.RequestAnnotation] != hibernation.RequestDiscard ||
+		current.Annotations[hibernation.RequestAnnotation] != hibernation.RequestDiscard ||
+		current.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarding ||
+		old.Annotations[hibernation.AttemptAnnotation] == "" || old.Annotations[hibernation.AttemptAnnotation] != current.Annotations[hibernation.AttemptAnnotation] {
+		return false
+	}
+	expected := old.Spec.DeepCopy()
+	halted := v1.RunStrategyHalted
+	expected.Running = nil
+	expected.RunStrategy = &halted
+	return equality.Semantic.DeepEqual(*expected, current.Spec)
 }

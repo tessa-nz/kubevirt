@@ -27,7 +27,7 @@ import (
 )
 
 func TestHibernationRequiresExplicitOperationRBAC(t *testing.T) {
-	for _, operation := range []string{"hibernate", "resume", "finalizehibernation"} {
+	for _, operation := range []string{"hibernate", "resume", "finalizehibernation", "discardhibernation"} {
 		for _, tc := range []struct {
 			role    *rbacv1.ClusterRole
 			allowed bool

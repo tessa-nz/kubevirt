@@ -1263,19 +1263,21 @@ func (c *Controller) startVMI(vm *virtv1.VirtualMachine) (*virtv1.VirtualMachine
 	if err := c.reserveHibernationStatePVC(vm); err != nil {
 		return vm, err
 	}
-	ready, err := c.handleDataVolumes(vm)
-	if err != nil {
-		return vm, err
-	}
+	if vm.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarding {
+		ready, err := c.handleDataVolumes(vm)
+		if err != nil {
+			return vm, err
+		}
 
-	if !ready {
-		log.Log.Object(vm).V(4).Info("Waiting for DataVolumes to be created, delaying start")
-		return vm, nil
-	}
+		if !ready {
+			log.Log.Object(vm).V(4).Info("Waiting for DataVolumes to be created, delaying start")
+			return vm, nil
+		}
 
-	if controller.NewVirtualMachineConditionManager().HasConditionWithStatus(vm, virtv1.VirtualMachineManualRecoveryRequired, k8score.ConditionTrue) {
-		log.Log.Object(vm).Reason(err).Error(failedManualRecoveryRequiredCondSetErrMsg)
-		return vm, nil
+		if controller.NewVirtualMachineConditionManager().HasConditionWithStatus(vm, virtv1.VirtualMachineManualRecoveryRequired, k8score.ConditionTrue) {
+			log.Log.Object(vm).Reason(err).Error(failedManualRecoveryRequiredCondSetErrMsg)
+			return vm, nil
+		}
 	}
 
 	// TODO add check for existence
@@ -1310,26 +1312,28 @@ func (c *Controller) startVMI(vm *virtv1.VirtualMachine) (*virtv1.VirtualMachine
 	// the VMI before it is deleted
 	vmi.Finalizers = append(vmi.Finalizers, virtv1.VirtualMachineControllerFinalizer)
 
-	// We need to apply auto attach preferences before any new network or input devices are added.
-	if err := c.instancetypeController.ApplyAutoAttachPreferences(vm, vmi); err != nil {
-		log.Log.Object(vm).Infof("Failed to apply device preferences again to VirtualMachineInstance: %s/%s", vmi.Namespace, vmi.Name)
-		c.recorder.Eventf(vm, k8score.EventTypeWarning, common.FailedCreateVirtualMachineReason, "Error applying device preferences again: %v", err)
-		return vm, err
-	}
+	if vm.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarding {
+		// We need to apply auto attach preferences before any new network or input devices are added.
+		if err := c.instancetypeController.ApplyAutoAttachPreferences(vm, vmi); err != nil {
+			log.Log.Object(vm).Infof("Failed to apply device preferences again to VirtualMachineInstance: %s/%s", vmi.Namespace, vmi.Name)
+			c.recorder.Eventf(vm, k8score.EventTypeWarning, common.FailedCreateVirtualMachineReason, "Error applying device preferences again: %v", err)
+			return vm, err
+		}
 
-	cbt.SetChangedBlockTrackingOnVMI(vm, vmi, c.clusterConfig, c.namespaceStore)
+		cbt.SetChangedBlockTrackingOnVMI(vm, vmi, c.clusterConfig, c.namespaceStore)
 
-	AutoAttachInputDevice(vmi)
+		AutoAttachInputDevice(vmi)
 
-	err = netvmispec.SetDefaultNetworkInterface(c.clusterConfig, &vmi.Spec)
-	if err != nil {
-		return vm, err
-	}
+		err = netvmispec.SetDefaultNetworkInterface(c.clusterConfig, &vmi.Spec)
+		if err != nil {
+			return vm, err
+		}
 
-	if err = c.instancetypeController.ApplyToVMI(vm, vmi); err != nil {
-		log.Log.Object(vm).Infof("Failed to apply instancetype to VirtualMachineInstance: %s/%s", vmi.Namespace, vmi.Name)
-		c.recorder.Eventf(vm, k8score.EventTypeWarning, common.FailedCreateVirtualMachineReason, "Error creating virtual machine instance: Failed to apply instancetype: %v", err)
-		return vm, err
+		if err = c.instancetypeController.ApplyToVMI(vm, vmi); err != nil {
+			log.Log.Object(vm).Infof("Failed to apply instancetype to VirtualMachineInstance: %s/%s", vmi.Namespace, vmi.Name)
+			c.recorder.Eventf(vm, k8score.EventTypeWarning, common.FailedCreateVirtualMachineReason, "Error creating virtual machine instance: Failed to apply instancetype: %v", err)
+			return vm, err
+		}
 	}
 
 	netValidator := netadmitter.NewValidator(k8sfield.NewPath("spec"), &vmi.Spec, c.clusterConfig)
@@ -1907,6 +1911,7 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 
 	util.SetDefaultVolumeDisk(&vmi.Spec)
 	for _, key := range []string{
+		hibernation.SourceNodeAnnotation,
 		hibernation.StatePVCAnnotation,
 		hibernation.StateAnnotation,
 		hibernation.AttemptAnnotation,
@@ -1926,6 +1931,36 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 		vmi.Annotations[hibernation.StateAnnotation] = hibernation.StateRestoring
 	}
 
+	if vm.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarding {
+		// Cleanup never boots a guest or needs its volumes and memory allocation.
+		vmi.Spec = virtv1.VirtualMachineInstanceSpec{
+			Architecture: vmi.Spec.Architecture, NodeSelector: vmi.Spec.NodeSelector, Affinity: vmi.Spec.Affinity, Tolerations: vmi.Spec.Tolerations,
+			Domain: virtv1.DomainSpec{Resources: virtv1.ResourceRequirements{Requests: k8score.ResourceList{k8score.ResourceMemory: resource.MustParse("128Mi")}}, Devices: virtv1.Devices{AutoattachPodInterface: pointer.P(false)}},
+		}
+		vmi.Annotations[hibernation.RequestAnnotation] = hibernation.RequestDiscard
+		// Intersect the source node with existing affinity rather than replacing it.
+		if vmi.Spec.Affinity == nil {
+			vmi.Spec.Affinity = &k8score.Affinity{}
+		}
+		if vmi.Spec.Affinity.NodeAffinity == nil {
+			vmi.Spec.Affinity.NodeAffinity = &k8score.NodeAffinity{}
+		}
+		selector := vmi.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+		if selector == nil {
+			selector = &k8score.NodeSelector{NodeSelectorTerms: []k8score.NodeSelectorTerm{{}}}
+		}
+		for i := range selector.NodeSelectorTerms {
+			selector.NodeSelectorTerms[i].MatchFields = append(selector.NodeSelectorTerms[i].MatchFields, k8score.NodeSelectorRequirement{Key: "metadata.name", Operator: k8score.NodeSelectorOpIn, Values: []string{vm.Annotations[hibernation.SourceNodeAnnotation]}})
+		}
+		vmi.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = selector
+	}
+	if vm.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarded {
+		for key := range vmi.Annotations {
+			if strings.HasPrefix(key, "hibernation.kubevirt.io/") && key != hibernation.StatePVCAnnotation {
+				delete(vmi.Annotations, key)
+			}
+		}
+	}
 	return vmi
 }
 

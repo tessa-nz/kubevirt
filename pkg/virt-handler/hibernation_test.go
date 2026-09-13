@@ -249,6 +249,12 @@ func (f *fakeHibernationKeys) Destroy(protection.Attempt) error {
 	}
 	return f.failure
 }
+func (f *fakeHibernationKeys) Discard(protection.Attempt) error {
+	if f.failure == nil {
+		f.destroyed = true
+	}
+	return f.failure
+}
 func (f *fakeHibernationKeys) Abandon(protection.Attempt) error {
 	if f.failure == nil {
 		f.abandoned = true
@@ -338,5 +344,72 @@ func TestLabFailureBeforeTPMConsumption(t *testing.T) {
 	c := &VirtualMachineController{hibernationKeys: keys}
 	if c.syncHibernation(client, vmi, hibernation.RequestCommitUnpause) == nil || keys.consumed {
 		t.Fatal("before-consume injection changed TPM state")
+	}
+}
+
+func TestDiscardRequiresSourceNodeAndAbsentDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		domain       bool
+		want         bool
+	}{
+		{"valid", "source-node", false, true},
+		{"wrong node", "other-node", false, false},
+		{"missing source", "", false, false},
+		{"existing domain", "source-node", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := cmdclient.NewMockLauncherClient(ctrl)
+			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+				hibernation.StateAnnotation: hibernation.StateDiscarding, hibernation.RequestAnnotation: hibernation.RequestDiscard,
+				hibernation.SourceNodeAnnotation: tc.source, hibernation.VMUIDAnnotation: "vm-uid", hibernation.AttemptAnnotation: "attempt",
+			}}}
+			keys := &fakeHibernationKeys{}
+			controller := &VirtualMachineController{BaseController: &BaseController{host: "source-node"}, hibernationKeys: keys}
+			if tc.source == "source-node" {
+				var domain *api.Domain
+				if tc.domain {
+					domain = &api.Domain{Status: api.DomainStatus{Status: api.Paused}}
+				}
+				client.EXPECT().GetDomain().Return(domain, tc.domain, nil)
+			}
+			result, err := controller.prepareHibernationProtection(client, vmi, hibernation.RequestDiscard)
+			if tc.want {
+				if err != nil || result == nil || !result.KeyErased || !keys.destroyed {
+					t.Fatalf("discard failed: %v", err)
+				}
+			} else if err == nil || keys.destroyed {
+				t.Fatal("unsafe discard was allowed")
+			}
+		})
+	}
+}
+
+func TestDiscardRetriesLostLauncherReplyWithoutColdBoot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := cmdclient.NewMockLauncherClient(ctrl)
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		hibernation.StateAnnotation: hibernation.StateDiscarding, hibernation.RequestAnnotation: hibernation.RequestDiscard,
+		hibernation.SourceNodeAnnotation: "source-node", hibernation.VMUIDAnnotation: "vm-uid", hibernation.AttemptAnnotation: "attempt",
+	}}}
+	client.EXPECT().GetDomain().Return(nil, false, nil).Times(2)
+	gomock.InOrder(
+		client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE, gomock.Any(), false, gomock.Any()).Return(nil, context.DeadlineExceeded),
+		client.EXPECT().HibernateVirtualMachine(vmi, cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE, gomock.Any(), false, gomock.Any()).Return(&cmdv1.HibernationResponse{Response: &cmdv1.Response{Success: true}, Phase: hibernation.StateDiscarded, MetadataJson: []byte(`{"vmUID":"vm-uid","attemptID":"attempt","erasedAt":"now","discardedAt":"now"}`)}, nil),
+	)
+	c := &VirtualMachineController{BaseController: &BaseController{host: "source-node"}, hibernationKeys: &fakeHibernationKeys{}}
+	if err := c.syncHibernation(client, vmi, hibernation.RequestDiscard); err == nil {
+		t.Fatal("lost reply was accepted")
+	}
+	if vmi.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarding || vmi.Annotations[hibernation.RequestAnnotation] != hibernation.RequestDiscard {
+		t.Fatal("retry identity lost")
+	}
+	if err := c.syncHibernation(client, vmi, hibernation.RequestDiscard); err != nil {
+		t.Fatal(err)
+	}
+	// A discarded cleanup launcher must remain inert until the controller removes it.
+	if err := c.syncVirtualMachine(client, vmi, nil); err != nil {
+		t.Fatal(err)
 	}
 }

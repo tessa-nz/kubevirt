@@ -705,6 +705,14 @@ func (RestartOptions) SwaggerDoc() map[string]string {
 	}
 }
 
+func (DiscardHibernationOptions) SwaggerDoc() map[string]string {
+	return map[string]string{
+		"":          "DiscardHibernationOptions permanently abandons one failed hibernation attempt.",
+		"attemptID": "AttemptID must match the current failed attempt. This prevents delayed\nrequests from discarding a newer attempt.",
+		"dryRun":    "When present, modifications are not persisted. The only valid value is All.\n+optional\n+listType=atomic",
+	}
+}
+
 func (StartOptions) SwaggerDoc() map[string]string {
 	return map[string]string{
 		"":       "StartOptions may be provided on start request.",

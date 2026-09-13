@@ -22,12 +22,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"go.uber.org/mock/gomock"
 	"kubevirt.io/client-go/kubecli"
 
 	k8score "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
@@ -373,5 +375,98 @@ func TestHibernationRetriesPartiallyCompletedSaveRejection(t *testing.T) {
 	updated, _, _, err := controller.reconcileHibernation(vm, runningVMI)
 	if err != nil || updated.Annotations[hibernation.StateAnnotation] != hibernation.StateRunning {
 		t.Fatalf("cleanup retry remained stuck: %v", err)
+	}
+}
+
+func TestDiscardStartsWithInertNodeBoundLauncher(t *testing.T) {
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "tracer", Namespace: "default", Annotations: map[string]string{
+		hibernation.StateAnnotation: hibernation.StateDiscarding, hibernation.RequestAnnotation: hibernation.RequestDiscard,
+		hibernation.SourceNodeAnnotation: "source-node", hibernation.AttemptAnnotation: "attempt", hibernation.VMUIDAnnotation: "vm-uid",
+	}}, Spec: v1.VirtualMachineSpec{Template: &v1.VirtualMachineInstanceTemplateSpec{}}}
+	vm.Spec.Template.Spec.Domain.Resources.Requests = k8score.ResourceList{k8score.ResourceMemory: resource.MustParse("32Gi")}
+	vm.Spec.Template.Spec.Volumes = []v1.Volume{{Name: "unavailable-root", VolumeSource: v1.VolumeSource{PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{PersistentVolumeClaimVolumeSource: k8score.PersistentVolumeClaimVolumeSource{ClaimName: "missing-root"}}}}}
+	vmi := SetupVMIFromVM(vm)
+	if vmi.Annotations[hibernation.RequestAnnotation] != hibernation.RequestDiscard || vmi.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarding {
+		t.Fatal("cleanup VMI can reach ordinary startup")
+	}
+	if len(vmi.Spec.Volumes) != 0 || len(vmi.Spec.Domain.Devices.Disks) != 0 || vmi.Spec.Domain.Resources.Requests.Memory().Value() != 128*1024*1024 || vmi.Spec.Domain.Devices.AutoattachPodInterface == nil || *vmi.Spec.Domain.Devices.AutoattachPodInterface {
+		t.Fatal("cleanup inherited guest resources")
+	}
+	selector := vmi.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if len(selector.NodeSelectorTerms) != 1 || len(selector.NodeSelectorTerms[0].MatchFields) != 1 || selector.NodeSelectorTerms[0].MatchFields[0].Values[0] != "source-node" {
+		t.Fatal("cleanup can run on another node")
+	}
+	vm.Annotations[hibernation.StateAnnotation] = hibernation.StateDiscarded
+	delete(vm.Annotations, hibernation.RequestAnnotation)
+	vmi = SetupVMIFromVM(vm)
+	if hibernation.Active(vmi.Annotations) || vmi.Annotations[hibernation.AttemptAnnotation] != "" {
+		t.Fatal("explicit later cold boot inherited a discarded attempt")
+	}
+}
+
+func TestDiscardHaltsOnlyAfterValidatingReservedOriginalPVC(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("changed-pvc=%t", changed), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := kubecli.NewMockKubevirtClient(ctrl)
+			vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+			store := cache.NewStore(cache.MetaNamespaceKeyFunc)
+			uid := types.UID("pvc-uid")
+			if changed {
+				uid = "replacement-uid"
+			}
+			pvc := &k8score.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "state", Namespace: "default", UID: uid, Annotations: map[string]string{hibernation.VMUIDAnnotation: "vm-uid"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: v1.SchemeGroupVersion.String(), Kind: "VirtualMachine", Name: "tracer", UID: "vm-uid"}}}, Spec: k8score.PersistentVolumeClaimSpec{VolumeName: "pv"}}
+			if err := store.Add(pvc); err != nil {
+				t.Fatal(err)
+			}
+			strategy := v1.RunStrategyAlways
+			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "tracer", Namespace: "default", UID: "vm-uid", Annotations: map[string]string{
+				hibernation.StateAnnotation: hibernation.StateSaveIncomplete, hibernation.RequestAnnotation: hibernation.RequestDiscard,
+				hibernation.AttemptAnnotation: "attempt", hibernation.VMUIDAnnotation: "vm-uid", hibernation.SourceNodeAnnotation: "source-node",
+				hibernation.StatePVCAnnotation: "state", hibernation.PVCIdentitiesAnnotation: `{"state":"pvc-uid/pv"}`,
+			}}, Spec: v1.VirtualMachineSpec{RunStrategy: &strategy, Template: &v1.VirtualMachineInstanceTemplateSpec{}}}
+			if !changed {
+				client.EXPECT().VirtualMachine("default").Return(vmClient)
+				vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+					if *updated.Spec.RunStrategy != v1.RunStrategyHalted || updated.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarding || updated.Annotations[hibernation.AttemptAnnotation] != "attempt" {
+						t.Fatal("unsafe discard transition")
+					}
+					return updated, nil
+				})
+			}
+			c := &Controller{clientset: client, pvcStore: store}
+			_, _, handled, err := c.reconcileHibernation(vm, nil)
+			if !handled || (err != nil) != changed {
+				t.Fatalf("handled=%t err=%v", handled, err)
+			}
+		})
+	}
+}
+
+func TestDiscardCompletionRetriesLostVMUpdate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := kubecli.NewMockKubevirtClient(ctrl)
+	vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "tracer", Namespace: "default", UID: "vm-uid", Annotations: map[string]string{
+		hibernation.StateAnnotation: hibernation.StateDiscarding, hibernation.RequestAnnotation: hibernation.RequestDiscard,
+		hibernation.AttemptAnnotation: "attempt", hibernation.VMUIDAnnotation: "vm-uid", hibernation.SourceNodeAnnotation: "source-node",
+	}}}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		hibernation.StateAnnotation: hibernation.StateDiscarded, hibernation.AttemptAnnotation: "attempt", hibernation.VMUIDAnnotation: "vm-uid", hibernation.SourceNodeAnnotation: "source-node",
+	}}}
+	client.EXPECT().VirtualMachine("default").Return(vmClient).Times(2)
+	gomock.InOrder(
+		vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("lost update")),
+		vmClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, updated *v1.VirtualMachine, _ metav1.UpdateOptions) (*v1.VirtualMachine, error) {
+			return updated, nil
+		}),
+	)
+	c := &Controller{clientset: client}
+	if _, _, _, err := c.reconcileHibernation(vm, vmi); err == nil {
+		t.Fatal("lost update was accepted")
+	}
+	result, _, _, err := c.reconcileHibernation(vm, vmi)
+	if err != nil || result.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarded || result.Annotations[hibernation.RequestAnnotation] != "" {
+		t.Fatalf("receipt lost: %v", err)
 	}
 }

@@ -287,6 +287,9 @@ func TestTPMCollisionDoesNotAlterAnotherAttempt(t *testing.T) {
 	if err := store.Abandon(collision); !errors.Is(err, ErrIdentity) {
 		t.Fatalf("foreign-object erasure accepted: %v", err)
 	}
+	if err := store.Discard(collision); !errors.Is(err, ErrIdentity) {
+		t.Fatalf("discard accepted a foreign TPM object: %v", err)
+	}
 	key, err := store.Open(original)
 	if err != nil {
 		t.Fatal(err)
@@ -320,5 +323,61 @@ func TestMemoryProtectionRequiresHardSwapBoundary(t *testing.T) {
 				t.Fatalf("unexpected swap boundary result: %v", err)
 			}
 		})
+	}
+}
+
+func TestTPMDiscardRetriesAcrossDeletionBoundaries(t *testing.T) {
+	for _, consumed := range []bool{false, true} {
+		for _, boundary := range []tpm2.TPMCC{tpm2.TPMCCEvictControl, tpm2.TPMCCNVUndefineSpace} {
+			t.Run(fmt.Sprintf("consumed=%t/drop=%x", consumed, boundary), func(t *testing.T) {
+				store, sim, link := testTPM(t)
+				attempt := Attempt{VMUID: "discard-vm", ID: "discard-attempt"}
+				other := Attempt{VMUID: "other-vm", ID: "other-attempt"}
+				if _, err := store.Create(attempt); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.Create(other); err != nil {
+					t.Fatal(err)
+				}
+				if consumed {
+					if _, err := store.Consume(attempt); err != nil {
+						t.Fatal(err)
+					}
+				}
+				link.drop = boundary
+				if err := store.Discard(attempt); err == nil {
+					t.Fatal("lost deletion reply must be retried")
+				}
+				if key, err := store.Open(attempt); err == nil {
+					key.Close()
+					t.Fatal("discarded key reopened")
+				}
+				if err := sim.Reset(); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Discard(attempt); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Discard(attempt); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.transaction(attempt, func(a *tpmAttempt) error {
+					if _, err := a.keyPublic(); !errors.Is(err, ErrMissing) {
+						return fmt.Errorf("key remains: %v", err)
+					}
+					if _, err := a.nvPublic(); !errors.Is(err, ErrMissing) {
+						return fmt.Errorf("NV remains: %v", err)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				key, err := store.Open(other)
+				if err != nil {
+					t.Fatalf("unrelated key affected: %v", err)
+				}
+				key.Close()
+			})
+		}
 	}
 }

@@ -2164,7 +2164,7 @@ func (c *VirtualMachineController) syncVirtualMachine(client cmdclient.LauncherC
 	}
 	// The paused restore must wait for the controller's consumption request.
 	// Normal sync can otherwise unpause or cold-start an active attempt.
-	if hibernation.Active(vmi.Annotations) {
+	if hibernation.Active(vmi.Annotations) || vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarded {
 		return nil
 	}
 	smbios := c.clusterConfig.GetSMBIOS()
@@ -2201,6 +2201,9 @@ func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClie
 	case hibernation.RequestCommitUnpause:
 		action = cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE
 		successState = hibernation.StateRunningAwaitingVerification
+	case hibernation.RequestDiscard:
+		action = cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE
+		successState = hibernation.StateDiscarded
 	case hibernation.RequestErase:
 		action = cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE
 		successState = hibernation.StateRunning
@@ -2233,6 +2236,18 @@ func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClie
 		}
 		vmi.Annotations[hibernation.ErrorAnnotation] = err.Error()
 		return err
+	}
+	if request == hibernation.RequestDiscard {
+		if response == nil || response.Phase != hibernation.StateDiscarded {
+			return fmt.Errorf("launcher did not confirm discard completion")
+		}
+		var metadata hibernation.Metadata
+		if err := json.Unmarshal(response.MetadataJson, &metadata); err != nil {
+			return fmt.Errorf("invalid discard receipt: %w", err)
+		}
+		if metadata.VMUID != vmi.Annotations[hibernation.VMUIDAnnotation] || metadata.AttemptID != vmi.Annotations[hibernation.AttemptAnnotation] || metadata.ErasedAt == "" || metadata.DiscardedAt == "" {
+			return fmt.Errorf("discard receipt does not describe the current erased attempt")
+		}
 	}
 	if request == hibernation.RequestSave {
 		if response == nil || len(response.MetadataJson) == 0 {

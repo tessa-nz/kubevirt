@@ -90,7 +90,11 @@ func (l *LibvirtDomainManager) HibernateVMI(vmi *v1.VirtualMachineInstance, acti
 	case cmdv1.HibernationAction_HIBERNATION_ACTION_COMMIT_UNPAUSE:
 		metadata, phase, err = l.commitAndUnpauseVMI(vmi, statePath)
 	case cmdv1.HibernationAction_HIBERNATION_ACTION_ERASE:
-		metadata, phase, err = l.eraseVMI(vmi, statePath)
+		if annotation(vmi, hibernation.RequestAnnotation) == hibernation.RequestDiscard {
+			metadata, phase, err = l.discardVMI(vmi, statePath)
+		} else {
+			metadata, phase, err = l.eraseVMI(vmi, statePath)
+		}
 	default:
 		err = fmt.Errorf("unsupported hibernation action %s", action.String())
 	}
@@ -443,6 +447,43 @@ func (l *LibvirtDomainManager) eraseVMI(vmi *v1.VirtualMachineInstance, statePat
 	return metadata, hibernation.StateRunning, nil
 }
 
+func (l *LibvirtDomainManager) discardVMI(vmi *v1.VirtualMachineInstance, statePath string) (*hibernation.Metadata, string, error) {
+	if annotation(vmi, hibernation.StateAnnotation) != hibernation.StateDiscarding || l.hibernationContext == nil || !l.hibernationContext.KeyErased {
+		return nil, "", fmt.Errorf("discard requires a cleanup-only attempt and verified TPM key erasure")
+	}
+	domain, err := l.virConn.LookupDomainByName(api.VMINamespaceKeyFunc(vmi))
+	if err == nil {
+		domain.Free()
+		return nil, "", fmt.Errorf("discard refuses an existing domain")
+	}
+	if !domainerrors.IsNotFound(err) {
+		return nil, "", err
+	}
+	// The exclusively reserved state PVC has one slot. Interrupted publication
+	// can leave ciphertext and metadata temporary files without a valid manifest.
+	entries, err := os.ReadDir(filepath.Dir(statePath))
+	if err != nil {
+		return nil, "", err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == filepath.Base(statePath) || name == filepath.Base(statePath)+".partial" || strings.HasPrefix(name, ".encrypted-state-") || strings.HasPrefix(name, ".hibernation-") {
+			if entry.IsDir() {
+				return nil, "", fmt.Errorf("unexpected directory in hibernation state slot: %s", name)
+			}
+			if err := os.Remove(filepath.Join(filepath.Dir(statePath), name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, "", err
+			}
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	metadata := &hibernation.Metadata{FormatVersion: 2, VMUID: annotation(vmi, hibernation.VMUIDAnnotation), AttemptID: annotation(vmi, hibernation.AttemptAnnotation), ErasedAt: now, DiscardedAt: now}
+	if err := writeHibernationMetadata(statePath, metadata); err != nil {
+		return nil, "", err
+	}
+	return metadata, hibernation.StateDiscarded, nil
+}
+
 func (l *LibvirtDomainManager) currentMetadata(vmi *v1.VirtualMachineInstance) (*hibernation.Metadata, error) {
 	specHash, err := hibernation.Hash(vmi.Spec)
 	if err != nil {
@@ -694,7 +735,7 @@ func stableCPUFingerprint(cpuInfo string) string {
 // received its hibernation annotations. A successful save keeps this marker
 // until source-pod deletion; the restored VMI starts with protected annotations.
 func rejectHibernationMutation(vmi *v1.VirtualMachineInstance) error {
-	if hibernation.Active(vmi.Annotations) {
+	if hibernation.Active(vmi.Annotations) || annotation(vmi, hibernation.StateAnnotation) == hibernation.StateDiscarded {
 		return fmt.Errorf("lifecycle operation conflicts with an active hibernation attempt")
 	}
 	if _, err := os.Stat(hibernation.SaveInProgressPath); !errors.Is(err, os.ErrNotExist) {

@@ -41,6 +41,7 @@ type hibernationKeyStore interface {
 	Consume(protection.Attempt) (bool, error)
 	Destroy(protection.Attempt) error
 	Abandon(protection.Attempt) error
+	Discard(protection.Attempt) error
 }
 
 func hibernationAttempt(vmi *v1.VirtualMachineInstance) protection.Attempt {
@@ -85,6 +86,22 @@ func (c *VirtualMachineController) prepareHibernationProtection(client cmdclient
 			return nil, err
 		}
 		result.ConsumptionCommitted, result.FreshConsumption = true, fresh
+	case hibernation.RequestDiscard:
+		if vmi.Annotations[hibernation.StateAnnotation] != hibernation.StateDiscarding ||
+			vmi.Annotations[hibernation.SourceNodeAnnotation] == "" || vmi.Annotations[hibernation.SourceNodeAnnotation] != c.host || vmi.IsRunning() {
+			return nil, fmt.Errorf("discard requires a cleanup-only VMI on the recorded source node")
+		}
+		domain, exists, err := client.GetDomain()
+		if err != nil {
+			return nil, err
+		}
+		if exists || domain != nil {
+			return nil, fmt.Errorf("discard requires an absent domain")
+		}
+		if err := c.hibernationKeys.Discard(attempt); err != nil {
+			return nil, err
+		}
+		result.KeyErased = true
 	case hibernation.RequestErase:
 		if !vmi.IsRunning() || !controller.NewVirtualMachineInstanceConditionManager().HasConditionWithStatus(vmi, v1.VirtualMachineInstanceReady, k8sv1.ConditionTrue) || vmi.Annotations[hibernation.StateAnnotation] != hibernation.StateRunningAwaitingVerification {
 			return nil, fmt.Errorf("TPM erasure requires the current running, Ready attempt awaiting verification")

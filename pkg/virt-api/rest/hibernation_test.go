@@ -53,6 +53,13 @@ func TestHibernationPublicRequest(t *testing.T) {
 		{name: "undersized storage", operation: "hibernate", capacity: "32Gi", gate: true, approved: true, want: 409},
 		{name: "resume", operation: "resume", state: hibernation.StateHibernated, gate: true, noVMI: true, want: 202},
 		{name: "resume running", operation: "resume", state: hibernation.StateHibernated, gate: true, want: 409},
+		{name: "discard incomplete", operation: "discardhibernation", state: hibernation.StateSaveIncomplete, gate: true, noVMI: true, want: 202},
+		{name: "discard consumed", operation: "discardhibernation", state: hibernation.StateRestoreCommitLost, gate: true, noVMI: true, want: 202},
+		{name: "discard rejected", operation: "discardhibernation", state: hibernation.StateResumeRejected, gate: true, noVMI: true, want: 202},
+		{name: "discard dry run", operation: "discardhibernation", state: hibernation.StateSaveIncomplete, gate: true, noVMI: true, dryRun: true, want: 202},
+		{name: "discard live VMI", operation: "discardhibernation", state: hibernation.StateSaveIncomplete, gate: true, want: 409},
+		{name: "discard saved guest", operation: "discardhibernation", state: hibernation.StateHibernated, gate: true, noVMI: true, want: 409},
+		{name: "discard running guest", operation: "discardhibernation", state: hibernation.StateRunning, gate: true, noVMI: true, want: 409},
 		{name: "finalize", operation: "finalizehibernation", state: hibernation.StateRunningAwaitingVerification, gate: true, want: 202},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,7 +72,7 @@ func TestHibernationPublicRequest(t *testing.T) {
 				cfg.DeveloperConfiguration = &v1.DeveloperConfiguration{FeatureGates: []string{featuregate.HibernationGate}}
 			}
 			config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(cfg)
-			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "vm-uid", ResourceVersion: "42", Annotations: map[string]string{hibernation.StatePVCAnnotation: "state", hibernation.StateAnnotation: tc.state, hibernation.ArtifactDigestAnnotation: "digest"}}}
+			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", UID: "vm-uid", ResourceVersion: "42", Annotations: map[string]string{hibernation.AttemptAnnotation: "attempt-one", hibernation.StatePVCAnnotation: "state", hibernation.StateAnnotation: tc.state, hibernation.ArtifactDigestAnnotation: "digest"}}}
 			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StatePVCAnnotation: "state"}}, Spec: v1.VirtualMachineInstanceSpec{Domain: v1.DomainSpec{Resources: v1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Gi")}}}}, Status: v1.VirtualMachineInstanceStatus{Phase: v1.Running, Conditions: []v1.VirtualMachineInstanceCondition{{Type: v1.VirtualMachineInstanceReady, Status: corev1.ConditionTrue}}}}
 			if tc.gate {
 				client.EXPECT().VirtualMachine("default").Return(vmClient).AnyTimes()
@@ -93,6 +100,9 @@ func TestHibernationPublicRequest(t *testing.T) {
 						if operation == "finalizehibernation" {
 							operation = hibernation.RequestFinalize
 						}
+						if operation == "discardhibernation" {
+							operation = hibernation.RequestDiscard
+						}
 						if updated.ResourceVersion != "42" || updated.Annotations[hibernation.RequestAnnotation] != operation {
 							t.Fatalf("incorrect queued update: %+v", updated.ObjectMeta)
 						}
@@ -108,11 +118,18 @@ func TestHibernationPublicRequest(t *testing.T) {
 			ws.Route(ws.PUT("/hibernate").To(app.HibernateVMRequestHandler))
 			ws.Route(ws.PUT("/resume").To(app.ResumeVMRequestHandler))
 			ws.Route(ws.PUT("/finalizehibernation").To(app.FinalizeHibernationVMRequestHandler))
+			ws.Route(ws.PUT("/discardhibernation").To(app.DiscardHibernationVMRequestHandler))
 			container := restful.NewContainer()
 			container.Add(ws)
 			body := "{}"
 			if tc.dryRun {
 				body = `{"dryRun":["All"]}`
+			}
+			if tc.operation == "discardhibernation" {
+				body = `{"attemptID":"attempt-one"}`
+				if tc.dryRun {
+					body = `{"attemptID":"attempt-one","dryRun":["All"]}`
+				}
 			}
 			req := httptest.NewRequest(http.MethodPut, "/namespaces/default/virtualmachines/test/"+tc.operation, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
@@ -191,5 +208,68 @@ func TestHibernateRejectsPendingStopOrDeletingVMI(t *testing.T) {
 	vmi.DeletionTimestamp = &now
 	if err := validateHibernationRequest(vm, vmi, hibernation.RequestHibernate); err == nil {
 		t.Fatal("hibernate accepted a deleting VMI")
+	}
+}
+
+func TestDiscardRejectsMissingAndStaleAttemptBeforeQueuing(t *testing.T) {
+	for _, body := range []string{`{}`, `{"attemptID":"older-attempt"}`} {
+		t.Run(body, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := kubecli.NewMockKubevirtClient(ctrl)
+			vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+			config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{DeveloperConfiguration: &v1.DeveloperConfiguration{FeatureGates: []string{featuregate.HibernationGate}}})
+			vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "tracer", Namespace: "default", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateSaveIncomplete, hibernation.AttemptAnnotation: "current-attempt"}}}
+			client.EXPECT().VirtualMachine("default").Return(vmClient)
+			vmClient.EXPECT().Get(gomock.Any(), "tracer", gomock.Any()).Return(vm, nil)
+			app := &SubresourceAPIApp{virtCli: client, clusterConfig: config}
+			ws := new(restful.WebService).Path("/namespaces/{namespace}/virtualmachines/{name}")
+			ws.Route(ws.PUT("/discardhibernation").To(app.DiscardHibernationVMRequestHandler))
+			container := restful.NewContainer()
+			container.Add(ws)
+			req := httptest.NewRequest(http.MethodPut, "/namespaces/default/virtualmachines/tracer/discardhibernation", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			container.ServeHTTP(resp, req)
+			if resp.Code != http.StatusConflict {
+				t.Fatalf("unexpected status %d: %s", resp.Code, resp.Body.String())
+			}
+		})
+	}
+}
+
+func TestDiscardCompletedRequestIsIdempotent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := kubecli.NewMockKubevirtClient(ctrl)
+	vmClient := kubecli.NewMockVirtualMachineInterface(ctrl)
+	vmiClient := kubecli.NewMockVirtualMachineInstanceInterface(ctrl)
+	config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{DeveloperConfiguration: &v1.DeveloperConfiguration{FeatureGates: []string{featuregate.HibernationGate}}})
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "tracer", Namespace: "default", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateDiscarded, hibernation.AttemptAnnotation: "current-attempt"}}}
+	client.EXPECT().VirtualMachine("default").Return(vmClient)
+	vmClient.EXPECT().Get(gomock.Any(), "tracer", gomock.Any()).Return(vm, nil)
+	client.EXPECT().VirtualMachineInstance("default").Return(vmiClient)
+	vmiClient.EXPECT().Get(gomock.Any(), "tracer", gomock.Any()).Return(nil, apierrors.NewNotFound(v1.Resource("virtualmachineinstance"), "tracer"))
+	app := &SubresourceAPIApp{virtCli: client, clusterConfig: config}
+	ws := new(restful.WebService).Path("/namespaces/{namespace}/virtualmachines/{name}")
+	ws.Route(ws.PUT("/discardhibernation").To(app.DiscardHibernationVMRequestHandler))
+	container := restful.NewContainer()
+	container.Add(ws)
+	req := httptest.NewRequest(http.MethodPut, "/namespaces/default/virtualmachines/tracer/discardhibernation", strings.NewReader(`{"attemptID":"current-attempt"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	container.ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestDiscardDuplicateDuringCleanupRemoval(t *testing.T) {
+	vm := &v1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{UID: "vm-uid", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateDiscarded, hibernation.AttemptAnnotation: "attempt"}}}
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateDiscarded, hibernation.AttemptAnnotation: "attempt", hibernation.VMUIDAnnotation: "vm-uid"}}}
+	if err := validateHibernationRequest(vm, vmi, hibernation.RequestDiscard); err != nil {
+		t.Fatal(err)
+	}
+	vmi.Annotations[hibernation.AttemptAnnotation] = "different-attempt"
+	if err := validateHibernationRequest(vm, vmi, hibernation.RequestDiscard); err == nil {
+		t.Fatal("foreign VMI accepted")
 	}
 }

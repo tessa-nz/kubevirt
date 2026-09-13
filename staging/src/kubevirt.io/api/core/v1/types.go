@@ -2776,6 +2776,18 @@ type RestartOptions struct {
 	DryRun []string `json:"dryRun,omitempty" protobuf:"bytes,2,rep,name=dryRun"`
 }
 
+// DiscardHibernationOptions permanently abandons one failed hibernation attempt.
+type DiscardHibernationOptions struct {
+	metav1.TypeMeta `json:",inline"`
+	// AttemptID must match the current failed attempt. This prevents delayed
+	// requests from discarding a newer attempt.
+	AttemptID string `json:"attemptID"`
+	// When present, modifications are not persisted. The only valid value is All.
+	// +optional
+	// +listType=atomic
+	DryRun []string `json:"dryRun,omitempty"`
+}
+
 // StartOptions may be provided on start request.
 type StartOptions struct {
 	metav1.TypeMeta `json:",inline"`

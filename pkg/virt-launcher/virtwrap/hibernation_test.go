@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -588,6 +589,71 @@ func TestHibernationRecoversPrivateStageAfterXMLAndPublicationFailure(t *testing
 			}
 			if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
 				t.Fatal("completed publication retained plaintext unnecessarily")
+			}
+		})
+	}
+}
+
+func TestDiscardRemovesInterruptedPublicationAndRetries(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	connection := cli.NewMockConnection(ctrl)
+	manager := protectedHibernationManager(t, connection)
+	statePath := filepath.Join(t.TempDir(), "state.save")
+	vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{
+		hibernation.AttemptAnnotation: "attempt-1", hibernation.VMUIDAnnotation: "vm-one", hibernation.StateAnnotation: hibernation.StateDiscarding,
+	}}}
+	for _, name := range []string{"state.save", "state.save.partial", ".encrypted-state-interrupted", ".hibernation-interrupted", "metadata.json"} {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(statePath), name), []byte("incomplete/corrupt"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sentinel := filepath.Join(filepath.Dir(statePath), "unrelated")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	connection.EXPECT().LookupDomainByName("default_tracer").Return(nil, libvirt.Error{Code: libvirt.ERR_NO_DOMAIN}).Times(2)
+	for i := 0; i < 2; i++ {
+		metadata, phase, err := manager.discardVMI(vmi, statePath)
+		if err != nil || phase != hibernation.StateDiscarded || metadata.DiscardedAt == "" || metadata.ErasedAt == "" || metadata.AttemptID != "attempt-1" || metadata.VMUID != "vm-one" {
+			t.Fatalf("discard failed: phase=%s err=%v metadata=%+v", phase, err, metadata)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Dir(statePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "metadata.json" && entry.Name() != "unrelated" {
+			t.Fatalf("artifact retained: %s", entry.Name())
+		}
+	}
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "keep" {
+		t.Fatal("unrelated file changed")
+	}
+}
+
+func TestDiscardCannotEraseWithoutKeyProofOrWithDomain(t *testing.T) {
+	for _, proof := range []bool{false, true} {
+		t.Run(fmt.Sprintf("key-proof=%t", proof), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			connection := cli.NewMockConnection(ctrl)
+			manager := protectedHibernationManager(t, connection)
+			manager.hibernationContext.KeyErased = proof
+			statePath := filepath.Join(t.TempDir(), "state.save")
+			if err := os.WriteFile(statePath, []byte("preserve"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{hibernation.StateAnnotation: hibernation.StateDiscarding}}}
+			if proof {
+				domain := cli.NewMockVirDomain(ctrl)
+				connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+				domain.EXPECT().Free().Return(nil)
+			}
+			if _, _, err := manager.discardVMI(vmi, statePath); err == nil {
+				t.Fatal("unsafe cleanup succeeded")
+			}
+			if data, err := os.ReadFile(statePath); err != nil || string(data) != "preserve" {
+				t.Fatal("state erased without preconditions")
 			}
 		})
 	}

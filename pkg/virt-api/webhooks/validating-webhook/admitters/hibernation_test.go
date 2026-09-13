@@ -229,3 +229,41 @@ func TestHibernationOwnershipCannotBeTransferred(t *testing.T) {
 		t.Fatalf("VMI ownership change bypassed attempt: %+v", response)
 	}
 }
+
+func TestDiscardHaltAdmissionIsNarrow(t *testing.T) {
+	config, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(&v1.KubeVirtConfiguration{})
+	for _, tc := range []struct {
+		name                                    string
+		trusted, alterDisk, newAttempt, allowed bool
+	}{
+		{name: "controller halts discarded attempt", trusted: true, allowed: true},
+		{name: "editor cannot halt active attempt"},
+		{name: "controller cannot also change disks", trusted: true, alterDisk: true},
+		{name: "controller cannot replace attempt", trusted: true, newAttempt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &v1.VirtualMachine{Spec: v1.VirtualMachineSpec{RunStrategy: pointer.P(v1.RunStrategyAlways), Template: &v1.VirtualMachineInstanceTemplateSpec{Spec: api.NewMinimalVMI("test").Spec}}}
+			old.Annotations = map[string]string{hibernation.StateAnnotation: hibernation.StateSaveIncomplete, hibernation.RequestAnnotation: hibernation.RequestDiscard, hibernation.AttemptAnnotation: "attempt"}
+			current := old.DeepCopy()
+			current.Spec.RunStrategy = pointer.P(v1.RunStrategyHalted)
+			current.Annotations[hibernation.StateAnnotation] = hibernation.StateDiscarding
+			if tc.alterDisk {
+				current.Spec.Template.Spec.Domain.CPU = &v1.CPU{Cores: 8}
+			}
+			if tc.newAttempt {
+				current.Annotations[hibernation.AttemptAnnotation] = "different-attempt"
+			}
+			oldRaw, _ := json.Marshal(old)
+			newRaw, _ := json.Marshal(current)
+			username := "editor"
+			if tc.trusted {
+				username = "system:serviceaccount:kubevirt:kubevirt-controller"
+			}
+			admitter := &VMsAdmitter{ClusterConfig: config, InstancetypeAdmitter: instancetypeWebhooks.NewAdmitterStub(), KubeVirtServiceAccounts: webhooks.KubeVirtServiceAccounts("kubevirt")}
+			result := admitter.Admit(context.Background(), &admissionv1.AdmissionReview{Request: &admissionv1.AdmissionRequest{Resource: webhooks.VirtualMachineGroupVersionResource, Operation: admissionv1.Update, UserInfo: authv1.UserInfo{Username: username}, OldObject: runtime.RawExtension{Raw: oldRaw}, Object: runtime.RawExtension{Raw: newRaw}}})
+			if result.Allowed != tc.allowed {
+				t.Fatalf("allowed=%t want=%t result=%+v", result.Allowed, tc.allowed, result.Result)
+			}
+		})
+	}
+}
