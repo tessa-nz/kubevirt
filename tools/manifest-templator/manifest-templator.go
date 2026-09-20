@@ -160,7 +160,6 @@ func main() {
 		data.PackageName = *packageName
 		data.CreatedAt = getTimestamp()
 		data.ReplacesCsvVersion = ""
-		data.OperatorDeploymentSpec = getOperatorDeploymentSpec(data, 2)
 		data.PriorityClassSpec = getPriorityClassSpec(2)
 		data.VirtOperatorImage = *virtOperatorImage
 		data.VirtApiImage = *virtApiImage
@@ -177,6 +176,8 @@ func main() {
 		data.SidecarShimImage = *sidecarShimImage
 		data.Hypervisor = *hypervisor
 		data.WithKubeVirtControlPlaneLabel = *withKubeVirtControlPlaneLabel
+		// Build after image overrides are populated so release digests are retained.
+		data.OperatorDeploymentSpec = getOperatorDeploymentSpec(data, 2)
 		if *featureGates != "" {
 			data.FeatureGates = strings.Split(*featureGates, ",")
 		}
