@@ -68,7 +68,8 @@ func (l *LibvirtDomainManager) HibernateVMI(vmi *v1.VirtualMachineInstance, acti
 		}
 		l.hibernationContext = nil
 	}()
-	if protectionContext == nil || protectionContext.Provider != protection.Provider {
+	if protectionContext == nil || (protectionContext.Provider != protection.Provider && protectionContext.Provider != protection.RemoteProvider) ||
+		(protectionContext.Provider == protection.RemoteProvider && (protectionContext.ProviderID == "" || protectionContext.PrincipalID == "" || protectionContext.RegistrationUID == "" || protectionContext.ClusterID == "")) {
 		return nil, fmt.Errorf("TPM state protection is required")
 	}
 
@@ -123,7 +124,7 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 			if err != nil {
 				return nil, "", err
 			}
-			if readTrimmed(hibernation.SaveInProgressPath) == digest && existing.ProtectionKeyID == key.ID && existing.ProtectionRecipient == key.Recipient && existing.FormatVersion == 2 {
+			if readTrimmed(hibernation.SaveInProgressPath) == digest && existing.ProtectionKeyID == key.ID && existing.ProtectionRecipient == key.Recipient && l.hibernationAuthorityMatches(existing) {
 				return existing, hibernation.StateHibernated, nil
 			}
 			// A publication whose final marker write failed can only be recovered
@@ -140,7 +141,7 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 	}
 	metadata, err := readHibernationMetadata(stage)
 	if err == nil {
-		if metadata.AttemptID != annotation(vmi, hibernation.AttemptAnnotation) || metadata.VMUID != annotation(vmi, hibernation.VMUIDAnnotation) || metadata.ProtectionKeyID != key.ID || metadata.ProtectionRecipient != key.Recipient {
+		if !l.hibernationAuthorityMatches(metadata) || metadata.AttemptID != annotation(vmi, hibernation.AttemptAnnotation) || metadata.VMUID != annotation(vmi, hibernation.VMUIDAnnotation) || metadata.ProtectionKeyID != key.ID || metadata.ProtectionRecipient != key.Recipient {
 			return nil, "", fmt.Errorf("private save stage belongs to another attempt or key")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -159,7 +160,14 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 		if err != nil {
 			return nil, "", err
 		}
-		metadata.ProtectionProvider, metadata.ProtectionKeyID, metadata.ProtectionRecipient = protection.Provider, key.ID, key.Recipient
+		metadata.ProtectionProvider, metadata.ProtectionKeyID, metadata.ProtectionRecipient = l.hibernationContext.Provider, key.ID, key.Recipient
+		if l.hibernationContext.Provider == protection.RemoteProvider {
+			metadata.FormatVersion = 3
+			metadata.ProtectionProviderID = l.hibernationContext.ProviderID
+			metadata.ProtectionPrincipalID = l.hibernationContext.PrincipalID
+			metadata.ProtectionRegistrationUID = l.hibernationContext.RegistrationUID
+			metadata.ProtectionClusterID = l.hibernationContext.ClusterID
+		}
 		metadata.SourceVMIUID = string(vmi.UID)
 		metadata.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		// Persist the private descriptor before stopping QEMU. Its completed save

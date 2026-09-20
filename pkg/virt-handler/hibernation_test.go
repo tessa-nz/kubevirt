@@ -34,6 +34,7 @@ import (
 	k8sv1 "k8s.io/api/core/v1"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	"kubevirt.io/kubevirt/pkg/hibernation"
+	"kubevirt.io/kubevirt/pkg/hibernation/keyservice"
 	"kubevirt.io/kubevirt/pkg/hibernation/protection"
 	cmdclient "kubevirt.io/kubevirt/pkg/virt-handler/cmd-client"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
@@ -412,5 +413,22 @@ func TestDiscardRetriesLostLauncherReplyWithoutColdBoot(t *testing.T) {
 	// A discarded cleanup launcher must remain inert until the controller removes it.
 	if err := c.syncVirtualMachine(client, vmi, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUncertainRemoteConsumptionOnlyTerminatesPausedRestore(t *testing.T) {
+	for _, status := range []api.LifeCycle{api.Paused, api.Running} {
+		client := cmdclient.NewMockLauncherClient(gomock.NewController(t))
+		client.EXPECT().GetDomain().Return(&api.Domain{Status: api.DomainStatus{Status: status}}, true, nil)
+		c := &VirtualMachineController{hibernationKeys: &fakeHibernationKeys{failure: keyservice.ErrUncertainConsumption}}
+		vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hibernation.AttemptAnnotation: "attempt", hibernation.VMUIDAnnotation: "vm"}}}
+		_, err := c.prepareHibernationProtection(client, vmi, hibernation.RequestCommitUnpause)
+		if err == nil {
+			t.Fatal("uncertain consumption accepted")
+		}
+		lost := hibernation.RejectionPhase(err) == hibernation.StateRestoreCommitLost
+		if lost != (status == api.Paused) {
+			t.Fatalf("domain %s lost=%v", status, lost)
+		}
 	}
 }

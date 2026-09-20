@@ -39,8 +39,11 @@ import (
 
 func (l *LibvirtDomainManager) hibernationPublicKey() (protection.PublicKey, error) {
 	context := l.hibernationContext
-	if context == nil || context.Provider != protection.Provider || context.KeyID == "" || context.Recipient == "" {
+	if context == nil || (context.Provider != protection.Provider && context.Provider != protection.RemoteProvider) || context.KeyID == "" || context.Recipient == "" {
 		return protection.PublicKey{}, fmt.Errorf("TPM encryption recipient is required")
+	}
+	if context.Provider == protection.RemoteProvider && (context.ProviderID == "" || context.PrincipalID == "" || context.RegistrationUID == "" || context.ClusterID == "") {
+		return protection.PublicKey{}, fmt.Errorf("remote key authority bindings are required")
 	}
 	return protection.PublicKey{ID: context.KeyID, Recipient: context.Recipient}, nil
 }
@@ -157,7 +160,7 @@ func (l *LibvirtDomainManager) decryptHibernation(vmi *v1.VirtualMachineInstance
 	if err != nil {
 		return "", err
 	}
-	if metadata.FormatVersion != 2 || metadata.ProtectionProvider != protection.Provider || metadata.ProtectionKeyID != public.ID || metadata.ProtectionRecipient != public.Recipient {
+	if !l.hibernationAuthorityMatches(metadata) || metadata.ProtectionKeyID != public.ID || metadata.ProtectionRecipient != public.Recipient {
 		return "", fmt.Errorf("artifact is not protected by this attempt's TPM key")
 	}
 	private := &protection.PrivateKey{PublicKey: public, Identity: l.hibernationContext.PrivateIdentity}
@@ -282,4 +285,15 @@ func (l *LibvirtDomainManager) completeHibernationStage(vmi *v1.VirtualMachineIn
 	metadata.Completed = true
 	metadata.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return writeHibernationMetadata(stage, metadata)
+}
+
+func (l *LibvirtDomainManager) hibernationAuthorityMatches(m *hibernation.Metadata) bool {
+	c := l.hibernationContext
+	if c == nil || m.ProtectionProvider != c.Provider {
+		return false
+	}
+	if c.Provider == protection.Provider {
+		return m.FormatVersion == 2 && m.ProtectionProviderID == "" && m.ProtectionPrincipalID == "" && m.ProtectionRegistrationUID == "" && m.ProtectionClusterID == ""
+	}
+	return c.Provider == protection.RemoteProvider && m.FormatVersion == 3 && m.ProtectionProviderID == c.ProviderID && m.ProtectionPrincipalID == c.PrincipalID && m.ProtectionRegistrationUID == c.RegistrationUID && m.ProtectionClusterID == c.ClusterID
 }

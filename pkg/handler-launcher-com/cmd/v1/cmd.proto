@@ -69,6 +69,10 @@ message HibernationProtection {
   bool consumptionCommitted = 5;
   bool freshConsumption = 6;
   bool keyErased = 7;
+  string providerID = 8;
+  string principalID = 9;
+  string registrationUID = 10;
+  string clusterID = 11;
 }
 
 message HibernationResponse {

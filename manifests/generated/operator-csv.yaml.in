@@ -371,6 +371,12 @@ spec:
           verbs:
           - get
         - apiGroups:
+          - hibernation.kubevirt.io
+          resources:
+          - hibernationkeyregistrations
+          verbs:
+          - get
+        - apiGroups:
           - snapshot.storage.k8s.io
           resources:
           - volumesnapshots
@@ -870,6 +876,30 @@ spec:
           - k8s.cni.cncf.io
           resources:
           - network-attachment-definitions
+          verbs:
+          - get
+        - apiGroups:
+          - hibernation.kubevirt.io
+          resources:
+          - hibernationkeyregistrations
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - hibernation.kubevirt.io
+          resources:
+          - hibernationkeyregistrations/status
+          verbs:
+          - get
+          - update
+          - patch
+        - apiGroups:
+          - ""
+          resourceNames:
+          - kube-system
+          resources:
+          - namespaces
           verbs:
           - get
         - apiGroups:
@@ -1519,6 +1549,19 @@ spec:
           - list
           - watch
           - deletecollection
+        - apiGroups:
+          - hibernation.kubevirt.io
+          resources:
+          - hibernationkeyregistrations
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+          - use
         - apiGroups:
           - authentication.k8s.io
           resources:

@@ -71,6 +71,9 @@ func newHandlerClusterRole() *rbacv1.ClusterRole {
 			},
 		},
 		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{"hibernation.kubevirt.io"}, Resources: []string{"hibernationkeyregistrations"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{"hibernation.kubevirt.io"}, Resources: []string{"hibernationkeyregistrations/status"}, Verbs: []string{"get", "update", "patch"}},
+			{APIGroups: []string{""}, Resources: []string{"namespaces"}, ResourceNames: []string{"kube-system"}, Verbs: []string{"get"}},
 			{
 				APIGroups: []string{
 					"kubevirt.io",

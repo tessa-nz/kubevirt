@@ -26,6 +26,7 @@ import (
 )
 
 const (
+	KeyRegistrationAnnotation        = "hibernation.kubevirt.io/key-registration"
 	StateProtectionNamespaceLabel    = "hibernation.kubevirt.io/state-protection"
 	StatePVCAnnotation               = "hibernation.kubevirt.io/state-pvc"
 	RequestAnnotation                = "hibernation.kubevirt.io/request"
@@ -74,40 +75,44 @@ const (
 )
 
 type Metadata struct {
-	FormatVersion       int               `json:"formatVersion"`
-	Completed           bool              `json:"completed"`
-	Consumed            bool              `json:"consumed"`
-	AttemptID           string            `json:"attemptID"`
-	VMUID               string            `json:"vmUID"`
-	SourceVMIUID        string            `json:"sourceVMIUID"`
-	EffectiveSpecHash   string            `json:"effectiveSpecHash"`
-	DomainXMLHash       string            `json:"domainXMLHash"`
-	StateSHA256         string            `json:"stateSHA256"`
-	StateSize           int64             `json:"stateSize"`
-	PlaintextSHA256     string            `json:"plaintextSHA256,omitempty"`
-	PlaintextSize       int64             `json:"plaintextSize,omitempty"`
-	ProtectionProvider  string            `json:"protectionProvider,omitempty"`
-	ProtectionKeyID     string            `json:"protectionKeyID,omitempty"`
-	ProtectionRecipient string            `json:"protectionRecipient,omitempty"`
-	PVCIdentities       map[string]string `json:"pvcIdentities"`
-	NodeName            string            `json:"nodeName"`
-	CPUModel            string            `json:"cpuModel"`
-	CPUFeatures         string            `json:"cpuFeatures"`
-	HostKernelRelease   string            `json:"hostKernelRelease"`
-	KVMFingerprint      string            `json:"kvmFingerprint"`
-	Microcode           string            `json:"microcode"`
-	KubeVirtVersion     string            `json:"kubeVirtVersion"`
-	QEMUVersion         string            `json:"qemuVersion"`
-	LibvirtVersion      string            `json:"libvirtVersion"`
-	CreatedAt           string            `json:"createdAt"`
-	CompletedAt         string            `json:"completedAt"`
-	ConsumedAt          string            `json:"consumedAt,omitempty"`
-	ErasedAt            string            `json:"erasedAt,omitempty"`
-	DiscardedAt         string            `json:"discardedAt,omitempty"`
-	ValidatedKernelPair string            `json:"validatedKernelPair,omitempty"`
-	OverrideAttempted   bool              `json:"compatibilityOverrideAttempted,omitempty"`
-	OverrideKernel      string            `json:"compatibilityOverrideKernel,omitempty"`
-	OverrideKVM         string            `json:"compatibilityOverrideKVM,omitempty"`
+	ProtectionProviderID      string            `json:"protectionProviderID,omitempty"`
+	ProtectionPrincipalID     string            `json:"protectionPrincipalID,omitempty"`
+	ProtectionRegistrationUID string            `json:"protectionRegistrationUID,omitempty"`
+	ProtectionClusterID       string            `json:"protectionClusterID,omitempty"`
+	FormatVersion             int               `json:"formatVersion"`
+	Completed                 bool              `json:"completed"`
+	Consumed                  bool              `json:"consumed"`
+	AttemptID                 string            `json:"attemptID"`
+	VMUID                     string            `json:"vmUID"`
+	SourceVMIUID              string            `json:"sourceVMIUID"`
+	EffectiveSpecHash         string            `json:"effectiveSpecHash"`
+	DomainXMLHash             string            `json:"domainXMLHash"`
+	StateSHA256               string            `json:"stateSHA256"`
+	StateSize                 int64             `json:"stateSize"`
+	PlaintextSHA256           string            `json:"plaintextSHA256,omitempty"`
+	PlaintextSize             int64             `json:"plaintextSize,omitempty"`
+	ProtectionProvider        string            `json:"protectionProvider,omitempty"`
+	ProtectionKeyID           string            `json:"protectionKeyID,omitempty"`
+	ProtectionRecipient       string            `json:"protectionRecipient,omitempty"`
+	PVCIdentities             map[string]string `json:"pvcIdentities"`
+	NodeName                  string            `json:"nodeName"`
+	CPUModel                  string            `json:"cpuModel"`
+	CPUFeatures               string            `json:"cpuFeatures"`
+	HostKernelRelease         string            `json:"hostKernelRelease"`
+	KVMFingerprint            string            `json:"kvmFingerprint"`
+	Microcode                 string            `json:"microcode"`
+	KubeVirtVersion           string            `json:"kubeVirtVersion"`
+	QEMUVersion               string            `json:"qemuVersion"`
+	LibvirtVersion            string            `json:"libvirtVersion"`
+	CreatedAt                 string            `json:"createdAt"`
+	CompletedAt               string            `json:"completedAt"`
+	ConsumedAt                string            `json:"consumedAt,omitempty"`
+	ErasedAt                  string            `json:"erasedAt,omitempty"`
+	DiscardedAt               string            `json:"discardedAt,omitempty"`
+	ValidatedKernelPair       string            `json:"validatedKernelPair,omitempty"`
+	OverrideAttempted         bool              `json:"compatibilityOverrideAttempted,omitempty"`
+	OverrideKernel            string            `json:"compatibilityOverrideKernel,omitempty"`
+	OverrideKVM               string            `json:"compatibilityOverrideKVM,omitempty"`
 }
 
 type CompatibilityOptions struct {

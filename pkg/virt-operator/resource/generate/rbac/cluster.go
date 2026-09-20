@@ -113,6 +113,7 @@ func GetAllCluster() []runtime.Object {
 		newInstancetypeViewClusterRole(),
 		newInstancetypeViewClusterRoleBinding(),
 		newMigrateClusterRole(),
+		newHibernationRegistrationAdminRole(),
 	}
 }
 

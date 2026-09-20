@@ -1,0 +1,30 @@
+services:
+  hibernation-key-service:
+    image: ${HIBERNATION_KEY_SERVICE_IMAGE:?Set a release image pinned by digest}
+    command:
+      - serve
+      - --state-dir=/state
+      - --listen=:19443
+      - --allow-client-cidrs=${HIBERNATION_ALLOWED_CLIENT_CIDRS:?Set only the required Orion host CIDRs}
+    restart: unless-stopped
+    read_only: true
+    user: '0:0'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    ulimits:
+      core: 0
+    devices:
+      - /dev/tpmrm0:/dev/tpmrm0
+    group_add:
+      - '${TPM_GID:-0}'
+    ports:
+      - '${HIBERNATION_BIND_IP:?Set the provider IP}:19443:19443'
+    volumes:
+      - type: bind
+        source: ${HIBERNATION_STATE_DIR:-/mnt/storage/orion-hibernation-key-service}
+        target: /state
+        bind:
+          create_host_path: false

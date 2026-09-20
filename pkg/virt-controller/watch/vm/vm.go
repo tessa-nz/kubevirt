@@ -1912,6 +1912,7 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 	util.SetDefaultVolumeDisk(&vmi.Spec)
 	for _, key := range []string{
 		hibernation.SourceNodeAnnotation,
+		hibernation.KeyRegistrationAnnotation,
 		hibernation.StatePVCAnnotation,
 		hibernation.StateAnnotation,
 		hibernation.AttemptAnnotation,
@@ -1956,7 +1957,7 @@ func SetupVMIFromVM(vm *virtv1.VirtualMachine) *virtv1.VirtualMachineInstance {
 	}
 	if vm.Annotations[hibernation.StateAnnotation] == hibernation.StateDiscarded {
 		for key := range vmi.Annotations {
-			if strings.HasPrefix(key, "hibernation.kubevirt.io/") && key != hibernation.StatePVCAnnotation {
+			if strings.HasPrefix(key, "hibernation.kubevirt.io/") && key != hibernation.StatePVCAnnotation && key != hibernation.KeyRegistrationAnnotation {
 				delete(vmi.Annotations, key)
 			}
 		}

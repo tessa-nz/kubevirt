@@ -4,6 +4,7 @@ go_library(
     name = "go_default_library",
     srcs = [
         "image.go",
+        "inspect.go",
         "keys.go",
         "memory.go",
         "tpm.go",

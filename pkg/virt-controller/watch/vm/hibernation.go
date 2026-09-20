@@ -376,6 +376,7 @@ func (c *Controller) updateVMIHibernation(vmi *virtv1.VirtualMachineInstance, re
 	copy.Annotations[hibernation.AttemptAnnotation] = attempt
 	copy.Annotations[hibernation.VMUIDAnnotation] = string(vm.UID)
 	copy.Annotations[hibernation.SourceNodeAnnotation] = vm.Annotations[hibernation.SourceNodeAnnotation]
+	setOrDelete(copy.Annotations, hibernation.KeyRegistrationAnnotation, vm.Annotations[hibernation.KeyRegistrationAnnotation])
 	payload, err := json.Marshal(pvcIdentities)
 	if err != nil {
 		return vmi, err

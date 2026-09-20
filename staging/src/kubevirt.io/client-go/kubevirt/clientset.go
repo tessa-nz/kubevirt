@@ -33,6 +33,7 @@ import (
 	kubevirtv1 "kubevirt.io/client-go/kubevirt/typed/core/v1"
 	exportv1 "kubevirt.io/client-go/kubevirt/typed/export/v1"
 	exportv1beta1 "kubevirt.io/client-go/kubevirt/typed/export/v1beta1"
+	hibernationv1alpha1 "kubevirt.io/client-go/kubevirt/typed/hibernation/v1alpha1"
 	instancetypev1beta1 "kubevirt.io/client-go/kubevirt/typed/instancetype/v1beta1"
 	migrationsv1alpha1 "kubevirt.io/client-go/kubevirt/typed/migrations/v1alpha1"
 	pluginv1alpha1 "kubevirt.io/client-go/kubevirt/typed/plugin/v1alpha1"
@@ -50,6 +51,7 @@ type Interface interface {
 	KubevirtV1() kubevirtv1.KubevirtV1Interface
 	ExportV1beta1() exportv1beta1.ExportV1beta1Interface
 	ExportV1() exportv1.ExportV1Interface
+	HibernationV1alpha1() hibernationv1alpha1.HibernationV1alpha1Interface
 	InstancetypeV1beta1() instancetypev1beta1.InstancetypeV1beta1Interface
 	MigrationsV1alpha1() migrationsv1alpha1.MigrationsV1alpha1Interface
 	PluginV1alpha1() pluginv1alpha1.PluginV1alpha1Interface
@@ -68,6 +70,7 @@ type Clientset struct {
 	kubevirtV1          *kubevirtv1.KubevirtV1Client
 	exportV1beta1       *exportv1beta1.ExportV1beta1Client
 	exportV1            *exportv1.ExportV1Client
+	hibernationV1alpha1 *hibernationv1alpha1.HibernationV1alpha1Client
 	instancetypeV1beta1 *instancetypev1beta1.InstancetypeV1beta1Client
 	migrationsV1alpha1  *migrationsv1alpha1.MigrationsV1alpha1Client
 	pluginV1alpha1      *pluginv1alpha1.PluginV1alpha1Client
@@ -105,6 +108,11 @@ func (c *Clientset) ExportV1beta1() exportv1beta1.ExportV1beta1Interface {
 // ExportV1 retrieves the ExportV1Client
 func (c *Clientset) ExportV1() exportv1.ExportV1Interface {
 	return c.exportV1
+}
+
+// HibernationV1alpha1 retrieves the HibernationV1alpha1Client
+func (c *Clientset) HibernationV1alpha1() hibernationv1alpha1.HibernationV1alpha1Interface {
+	return c.hibernationV1alpha1
 }
 
 // InstancetypeV1beta1 retrieves the InstancetypeV1beta1Client
@@ -210,6 +218,10 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 	if err != nil {
 		return nil, err
 	}
+	cs.hibernationV1alpha1, err = hibernationv1alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	if err != nil {
+		return nil, err
+	}
 	cs.instancetypeV1beta1, err = instancetypev1beta1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
@@ -265,6 +277,7 @@ func New(c rest.Interface) *Clientset {
 	cs.kubevirtV1 = kubevirtv1.New(c)
 	cs.exportV1beta1 = exportv1beta1.New(c)
 	cs.exportV1 = exportv1.New(c)
+	cs.hibernationV1alpha1 = hibernationv1alpha1.New(c)
 	cs.instancetypeV1beta1 = instancetypev1beta1.New(c)
 	cs.migrationsV1alpha1 = migrationsv1alpha1.New(c)
 	cs.pluginV1alpha1 = pluginv1alpha1.New(c)

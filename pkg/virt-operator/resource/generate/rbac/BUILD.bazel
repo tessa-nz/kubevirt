@@ -8,6 +8,7 @@ go_library(
         "controller.go",
         "exportproxy.go",
         "handler.go",
+        "hibernation.go",
         "operator.go",
         "servicemonitor.go",
         "synchronizationcontroller.go",

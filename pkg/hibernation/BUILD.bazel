@@ -27,6 +27,7 @@ go_test(
     srcs = [
         "control_test.go",
         "hibernation_suite_test.go",
+        "remote_integrity_test.go",
         "types_test.go",
     ],
     embed = [":go_default_library"],

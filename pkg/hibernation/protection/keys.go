@@ -26,6 +26,8 @@ import (
 	"fmt"
 )
 
+const RemoteProvider = "remote-tpm2-age-x25519-v1"
+
 const Provider = "tpm2-persistent-age-x25519-v1"
 
 var (

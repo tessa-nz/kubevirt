@@ -57,7 +57,9 @@ import (
 	"kubevirt.io/kubevirt/pkg/executor"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	"kubevirt.io/kubevirt/pkg/hibernation"
+	"kubevirt.io/kubevirt/pkg/hibernation/keyservice"
 	"kubevirt.io/kubevirt/pkg/hibernation/protection"
+	"kubevirt.io/kubevirt/pkg/hibernation/registration"
 	hostdisk "kubevirt.io/kubevirt/pkg/host-disk"
 	hotplugdisk "kubevirt.io/kubevirt/pkg/hotplug-disk"
 	"kubevirt.io/kubevirt/pkg/hypervisor"
@@ -106,7 +108,8 @@ type downwardMetricsManager interface {
 }
 
 type VirtualMachineController struct {
-	hibernationKeys hibernationKeyStore
+	hibernationKeys          hibernationKeyStore
+	hibernationRegistrations *registration.Controller
 	*BaseController
 	capabilities             *libvirtxml.Caps
 	clientset                kubecli.KubevirtClient
@@ -199,6 +202,7 @@ func NewVirtualMachineController(
 
 	c := &VirtualMachineController{
 		BaseController:           baseCtrl,
+		hibernationRegistrations: registration.New(clientset, clientset.GeneratedKubeVirtClient().HibernationV1alpha1().HibernationKeyRegistrations(), host, keyservice.ClientDirectory),
 		hibernationKeys:          protection.NewNodeTPMStore(filepath.Join(virtPrivateDir, "hibernation-tpm.lock")),
 		capabilities:             capabilities,
 		clientset:                clientset,
@@ -262,6 +266,18 @@ func NewVirtualMachineController(
 func (c *VirtualMachineController) Run(threadiness int, stopCh chan struct{}) {
 	defer c.queue.ShutDown()
 	c.logger.Info("Starting virt-handler vms controller.")
+	if c.hibernationRegistrations != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-stopCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		go c.hibernationRegistrations.Run(ctx)
+	}
 
 	go c.deviceManagerController.Run(stopCh)
 
@@ -2228,7 +2244,14 @@ func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClie
 		if response != nil && response.Response != nil && !response.Response.Success &&
 			(hibernation.IsTerminal(response.Phase) || response.Phase == hibernation.StateSaveRejected) {
 			if response.Phase == hibernation.StateSaveRejected {
-				if cleanupErr := c.hibernationKeys.Abandon(hibernationAttempt(vmi)); cleanupErr != nil {
+				store, _, storeErr := c.hibernationStore(vmi)
+				var cleanupErr error
+				if storeErr != nil {
+					cleanupErr = storeErr
+				} else {
+					cleanupErr = store.Abandon(hibernationAttempt(vmi))
+				}
+				if cleanupErr != nil {
 					return fmt.Errorf("save rejected but TPM cleanup is pending: %w", cleanupErr)
 				}
 			}

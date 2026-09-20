@@ -113,7 +113,10 @@ func (admitter *VMsAdmitter) Admit(ctx context.Context, ar *admissionv1.Admissio
 			return webhookutils.ToAdmissionResponseError(err)
 		}
 	}
-	if !trustedHibernationWriter && hibernation.ControlChanged(oldVM.Annotations, vm.Annotations, !hibernation.Active(oldVM.Annotations)) {
+	if err := validateKeyRegistration(ctx, admitter.VirtClient, ar.Request, oldVM, &vm, trustedHibernationWriter); err != nil {
+		return webhookutils.ToAdmissionResponseError(err)
+	}
+	if !trustedHibernationWriter && hibernation.ControlChanged(withoutKeyRegistration(oldVM.Annotations), withoutKeyRegistration(vm.Annotations), !hibernation.Active(oldVM.Annotations)) {
 		return webhookutils.ToAdmissionResponse([]metav1.StatusCause{{
 			Type:    metav1.CauseTypeFieldValueNotSupported,
 			Message: "use the hibernate, resume, finalizehibernation, and discardhibernation subresources to manage hibernation",

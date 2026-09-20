@@ -32,6 +32,7 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	exportv1 "kubevirt.io/api/export/v1"
 	exportv1beta1 "kubevirt.io/api/export/v1beta1"
+	hibernationv1alpha1 "kubevirt.io/api/hibernation/v1alpha1"
 	instancetypev1beta1 "kubevirt.io/api/instancetype/v1beta1"
 	migrationsv1alpha1 "kubevirt.io/api/migrations/v1alpha1"
 	pluginv1alpha1 "kubevirt.io/api/plugin/v1alpha1"
@@ -51,6 +52,7 @@ var localSchemeBuilder = runtime.SchemeBuilder{
 	kubevirtv1.AddToScheme,
 	exportv1beta1.AddToScheme,
 	exportv1.AddToScheme,
+	hibernationv1alpha1.AddToScheme,
 	instancetypev1beta1.AddToScheme,
 	migrationsv1alpha1.AddToScheme,
 	pluginv1alpha1.AddToScheme,

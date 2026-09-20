@@ -1,0 +1,15 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "array.go",
+        "freelist.go",
+        "hashmap.go",
+        "shared.go",
+    ],
+    importmap = "kubevirt.io/kubevirt/vendor/go.etcd.io/bbolt/internal/freelist",
+    importpath = "go.etcd.io/bbolt/internal/freelist",
+    visibility = ["//vendor/go.etcd.io/bbolt:__subpackages__"],
+    deps = ["//vendor/go.etcd.io/bbolt/internal/common:go_default_library"],
+)

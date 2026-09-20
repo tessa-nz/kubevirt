@@ -323,12 +323,18 @@ func NewHandlerDaemonSet(config *operatorutil.KubeVirtDeploymentConfig, productN
 		{"libvirt-runtimes", runtimesPath, runtimesPath, nil},
 		{"virt-share-dir", util.VirtShareDir, util.VirtShareDir, &bidi},
 		{"virt-private-dir", util.VirtPrivateDir, util.VirtPrivateDir, nil},
+		{"hibernation-client", "/var/lib/kubevirt/hibernation-client", "/var/lib/kubevirt/hibernation-client", nil},
 		{"kubelet-pods", kubeletPodsPath, "/pods", nil},
 		{"kubelet", util.KubeletRoot, util.KubeletRoot, &hostToContainer},
 		{"node-labeller", nodeLabellerVolumePath, nodeLabellerVolumePath, nil},
 	}
 
 	for _, volume := range volumes {
+		var hostPathType *corev1.HostPathType
+		if volume.name == "hibernation-client" {
+			t := corev1.HostPathDirectoryOrCreate
+			hostPathType = &t
+		}
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 			Name:             volume.name,
 			MountPath:        volume.mountPath,
@@ -339,6 +345,7 @@ func NewHandlerDaemonSet(config *operatorutil.KubeVirtDeploymentConfig, productN
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
 					Path: volume.path,
+					Type: hostPathType,
 				},
 			},
 		})

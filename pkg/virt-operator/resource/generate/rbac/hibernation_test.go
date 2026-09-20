@@ -44,3 +44,24 @@ func TestHibernationRequiresExplicitOperationRBAC(t *testing.T) {
 		}
 	}
 }
+
+func TestHibernationRegistrationConfigurationAndStatusAreSeparate(t *testing.T) {
+	admin, handler := newHibernationRegistrationAdminRole(), newHandlerClusterRole()
+	permits := func(role *rbacv1.ClusterRole, resource, verb string) bool {
+		for _, r := range role.Rules {
+			if slices.Contains(r.APIGroups, "hibernation.kubevirt.io") && slices.Contains(r.Resources, resource) && slices.Contains(r.Verbs, verb) {
+				return true
+			}
+		}
+		return false
+	}
+	if !permits(admin, "hibernationkeyregistrations", "update") || permits(admin, "hibernationkeyregistrations/status", "update") {
+		t.Fatal("configuration role has wrong status boundary")
+	}
+	if permits(handler, "hibernationkeyregistrations", "update") || !permits(handler, "hibernationkeyregistrations/status", "update") {
+		t.Fatal("handler can modify enrollment configuration or cannot report status")
+	}
+	if permits(newEditClusterRole(), "hibernationkeyregistrations", "use") {
+		t.Fatal("ordinary VM edit grants provider selection")
+	}
+}

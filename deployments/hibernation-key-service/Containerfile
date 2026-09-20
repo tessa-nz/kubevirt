@@ -1,0 +1,13 @@
+# Build from the KubeVirt source root. Pin the builder by digest for releases.
+ARG GO_IMAGE=quay.io/kubevirt/builder@sha256:34f3eada315a4a16130abac1a0bb47943bec022f5c79457bee8e3a26f4a26fb1
+FROM ${GO_IMAGE} AS build
+WORKDIR /src
+COPY . .
+RUN /bin/bash -c 'source /etc/profile.d/gimme.sh; CGO_ENABLED=0 GOTOOLCHAIN=local go build -mod=vendor -buildvcs=false -trimpath -ldflags="-s -w" -o /key-service ./cmd/virt-hibernation-key-service'
+FROM scratch
+ARG REVISION=unknown
+LABEL org.opencontainers.image.source="https://github.com/tessa-nz/kubevirt" org.opencontainers.image.revision="${REVISION}"
+COPY --from=build /key-service /key-service
+USER 0:0
+ENTRYPOINT ["/key-service"]
+CMD ["serve", "--state-dir=/state", "--listen=:19443"]

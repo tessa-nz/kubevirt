@@ -171,6 +171,14 @@ func main() {
 	imagePullPolicy := v1.PullPolicy(*pullPolicy)
 
 	switch *resourceType {
+	case "hibernation-registration":
+		crd, err := components.NewHibernationKeyRegistrationCrd()
+		if err != nil {
+			panic(err)
+		}
+		if err = util.MarshallObject(crd, os.Stdout); err != nil {
+			panic(err)
+		}
 	case "kv":
 		kv, err := components.NewKubeVirtCrd()
 		if err != nil {

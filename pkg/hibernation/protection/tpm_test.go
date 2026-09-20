@@ -381,3 +381,45 @@ func TestTPMDiscardRetriesAcrossDeletionBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestTPMProviderIdentityAndOwnershipInventory(t *testing.T) {
+	store, sim, _ := testTPM(t)
+	before, err := store.ProviderIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.ProviderIdentity()
+	if err != nil || before != again {
+		t.Fatalf("unstable provider identity: %v", err)
+	}
+	if err = store.CheckInventory(nil); err != nil {
+		t.Fatal(err)
+	}
+	a := Attempt{VMUID: "inventory-vm", ID: "inventory-attempt"}
+	if _, err = store.Create(a); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.CheckInventory(nil); err == nil {
+		t.Fatal("orphaned TPM objects accepted")
+	}
+	if err = store.CheckInventory([]Attempt{a}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Discard(a); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.CheckInventory(nil); err != nil {
+		t.Fatal(err)
+	}
+	// Only the in-process emulator is reset; no physical TPM is accessed.
+	if err = sim.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.ProviderIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatal("normal TPM reboot changed identity")
+	}
+}

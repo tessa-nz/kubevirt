@@ -27,6 +27,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/controller"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
 	"kubevirt.io/kubevirt/pkg/hibernation"
+	"kubevirt.io/kubevirt/pkg/hibernation/keyservice"
 	"kubevirt.io/kubevirt/pkg/hibernation/protection"
 	cmdclient "kubevirt.io/kubevirt/pkg/virt-handler/cmd-client"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
@@ -49,20 +50,20 @@ func hibernationAttempt(vmi *v1.VirtualMachineInstance) protection.Attempt {
 }
 
 func (c *VirtualMachineController) prepareHibernationProtection(client cmdclient.LauncherClient, vmi *v1.VirtualMachineInstance, request string) (*cmdv1.HibernationProtection, error) {
-	if c.hibernationKeys == nil {
-		return nil, fmt.Errorf("node TPM hibernation key store is unavailable")
+	store, result, err := c.hibernationStore(vmi)
+	if err != nil {
+		return nil, err
 	}
 	attempt := hibernationAttempt(vmi)
-	result := &cmdv1.HibernationProtection{Provider: protection.Provider}
 	switch request {
 	case hibernation.RequestSave:
-		key, err := c.hibernationKeys.Create(attempt)
+		key, err := store.Create(attempt)
 		if err != nil {
 			return nil, err
 		}
 		result.KeyID, result.Recipient = key.ID, key.Recipient
 	case hibernation.RequestRestorePaused:
-		key, err := c.hibernationKeys.Open(attempt)
+		key, err := store.Open(attempt)
 		if errors.Is(err, protection.ErrConsumed) {
 			return nil, hibernation.Reject(hibernation.StateRestoreCommitLost, err)
 		}
@@ -81,8 +82,11 @@ func (c *VirtualMachineController) prepareHibernationProtection(client cmdclient
 		if hibernation.LabEnabled && vmi.Annotations[hibernation.LabFailBeforeConsumeAnnotation] == attempt.ID && attempt.ID != "" {
 			return nil, hibernation.Reject(hibernation.StateRestoreCommitLost, fmt.Errorf("injected failure before TPM consumption"))
 		}
-		fresh, err := c.hibernationKeys.Consume(attempt)
+		fresh, err := store.Consume(attempt)
 		if err != nil {
+			if domain.Status.Status == api.Paused && errors.Is(err, keyservice.ErrUncertainConsumption) {
+				return nil, hibernation.Reject(hibernation.StateRestoreCommitLost, err)
+			}
 			return nil, err
 		}
 		result.ConsumptionCommitted, result.FreshConsumption = true, fresh
@@ -99,7 +103,7 @@ func (c *VirtualMachineController) prepareHibernationProtection(client cmdclient
 		if exists {
 			return nil, fmt.Errorf("discard requires an absent domain")
 		}
-		if err := c.hibernationKeys.Discard(attempt); err != nil {
+		if err := store.Discard(attempt); err != nil {
 			return nil, err
 		}
 		result.KeyErased = true
@@ -114,7 +118,7 @@ func (c *VirtualMachineController) prepareHibernationProtection(client cmdclient
 		if !exists || domain == nil || domain.Status.Status != api.Running {
 			return nil, fmt.Errorf("TPM erasure requires a running domain")
 		}
-		if err := c.hibernationKeys.Destroy(attempt); err != nil {
+		if err := store.Destroy(attempt); err != nil {
 			return nil, err
 		}
 		result.KeyErased = true

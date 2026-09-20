@@ -1,0 +1,13 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["btesting.go"],
+    importmap = "kubevirt.io/kubevirt/vendor/go.etcd.io/bbolt/internal/btesting",
+    importpath = "go.etcd.io/bbolt/internal/btesting",
+    visibility = ["//vendor/go.etcd.io/bbolt:__subpackages__"],
+    deps = [
+        "//vendor/go.etcd.io/bbolt:go_default_library",
+        "@com_github_stretchr_testify//require:go_default_library",
+    ],
+)

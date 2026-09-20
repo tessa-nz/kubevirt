@@ -658,3 +658,35 @@ func TestDiscardCannotEraseWithoutKeyProofOrWithDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestHibernationRemoteAuthorityCannotDowngradeOrChangeBinding(t *testing.T) {
+	c := &cmdv1.HibernationProtection{Provider: protection.RemoteProvider, ProviderID: "provider", PrincipalID: "principal", RegistrationUID: "registration", ClusterID: "cluster", KeyID: "key", Recipient: "recipient"}
+	manager := &LibvirtDomainManager{hibernationContext: c}
+	m := &hibernation.Metadata{FormatVersion: 3, ProtectionProvider: protection.RemoteProvider, ProtectionProviderID: "provider", ProtectionPrincipalID: "principal", ProtectionRegistrationUID: "registration", ProtectionClusterID: "cluster"}
+	if !manager.hibernationAuthorityMatches(m) {
+		t.Fatal("matching authority rejected")
+	}
+	for _, change := range []func(*hibernation.Metadata){func(m *hibernation.Metadata) { m.FormatVersion = 2 }, func(m *hibernation.Metadata) { m.ProtectionProvider = protection.Provider }, func(m *hibernation.Metadata) { m.ProtectionProviderID = "other" }, func(m *hibernation.Metadata) { m.ProtectionPrincipalID = "other" }, func(m *hibernation.Metadata) { m.ProtectionRegistrationUID = "other" }, func(m *hibernation.Metadata) { m.ProtectionClusterID = "other" }} {
+		modified := *m
+		change(&modified)
+		if manager.hibernationAuthorityMatches(&modified) {
+			t.Fatal("changed authority accepted")
+		}
+		before, e := hibernation.ArtifactDigest(*m)
+		if e != nil {
+			t.Fatal(e)
+		}
+		after, e := hibernation.ArtifactDigest(modified)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if before == after {
+			t.Fatal("authority not covered by artifact integrity")
+		}
+	}
+	c.Provider = protection.Provider
+	local := &hibernation.Metadata{FormatVersion: 2, ProtectionProvider: protection.Provider}
+	if !manager.hibernationAuthorityMatches(local) {
+		t.Fatal("legacy local artifact rejected")
+	}
+}
