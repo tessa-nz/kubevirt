@@ -2283,7 +2283,7 @@ func (c *VirtualMachineController) syncHibernation(client cmdclient.LauncherClie
 		if !metadata.Completed || metadata.Consumed || metadata.AttemptID == "" || metadata.VMUID == "" || metadata.AttemptID != vmi.Annotations[hibernation.AttemptAnnotation] || metadata.VMUID != vmi.Annotations[hibernation.VMUIDAnnotation] {
 			return fmt.Errorf("save response does not describe the current completed attempt")
 		}
-		if metadata.FormatVersion != 2 || metadata.ProtectionProvider != protection.Provider || metadata.ProtectionKeyID != protectionContext.KeyID || metadata.ProtectionRecipient != protectionContext.Recipient || metadata.StateSize <= 0 || metadata.PlaintextSize <= 0 {
+		if !validHibernationSaveProtection(metadata, protectionContext) {
 			return fmt.Errorf("save response does not describe a TPM-protected encrypted artifact")
 		}
 		digest, err := hibernation.ArtifactDigest(metadata)

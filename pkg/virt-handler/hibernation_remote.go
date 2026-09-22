@@ -95,3 +95,19 @@ func (r *remoteHibernationStore) erase(op string, a protection.Attempt) error {
 func (r *remoteHibernationStore) Destroy(a protection.Attempt) error { return r.erase("finalize", a) }
 func (r *remoteHibernationStore) Abandon(a protection.Attempt) error { return r.erase("abandon", a) }
 func (r *remoteHibernationStore) Discard(a protection.Attempt) error { return r.erase("discard", a) }
+
+// Validate the launcher receipt against the authority selected before saving.
+// Remote format 3 must never inherit the interpretation of local format 2.
+func validHibernationSaveProtection(m hibernation.Metadata, expected *cmdv1.HibernationProtection) bool {
+	if expected == nil || expected.KeyID == "" || expected.Recipient == "" || m.ProtectionProvider != expected.Provider || m.ProtectionKeyID != expected.KeyID || m.ProtectionRecipient != expected.Recipient || m.StateSize <= 0 || m.PlaintextSize <= 0 {
+		return false
+	}
+	switch expected.Provider {
+	case protection.Provider:
+		return m.FormatVersion == 2 && m.ProtectionProviderID == "" && m.ProtectionPrincipalID == "" && m.ProtectionRegistrationUID == "" && m.ProtectionClusterID == ""
+	case protection.RemoteProvider:
+		return m.FormatVersion == 3 && expected.ProviderID != "" && expected.PrincipalID != "" && expected.RegistrationUID != "" && expected.ClusterID != "" && m.ProtectionProviderID == expected.ProviderID && m.ProtectionPrincipalID == expected.PrincipalID && m.ProtectionRegistrationUID == expected.RegistrationUID && m.ProtectionClusterID == expected.ClusterID
+	default:
+		return false
+	}
+}

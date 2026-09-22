@@ -432,3 +432,40 @@ func TestUncertainRemoteConsumptionOnlyTerminatesPausedRestore(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveReceiptAcceptsRemoteFormatAndRejectsAuthoritySubstitution(t *testing.T) {
+	expected := &cmdv1.HibernationProtection{Provider: protection.RemoteProvider, ProviderID: "nas-tpm", PrincipalID: "approved-client", RegistrationUID: "registration", ClusterID: "cluster", KeyID: "key", Recipient: "recipient"}
+	saved := hibernation.Metadata{FormatVersion: 3, ProtectionProvider: protection.RemoteProvider, ProtectionProviderID: "nas-tpm", ProtectionPrincipalID: "approved-client", ProtectionRegistrationUID: "registration", ProtectionClusterID: "cluster", ProtectionKeyID: "key", ProtectionRecipient: "recipient", StateSize: 42, PlaintextSize: 21}
+	if !validHibernationSaveProtection(saved, expected) {
+		t.Fatal("remote TPM save receipt rejected")
+	}
+	mutations := map[string]func(*hibernation.Metadata){
+		"local format":         func(m *hibernation.Metadata) { m.FormatVersion = 2 },
+		"local provider":       func(m *hibernation.Metadata) { m.ProtectionProvider = protection.Provider },
+		"another TPM":          func(m *hibernation.Metadata) { m.ProtectionProviderID = "other" },
+		"another client":       func(m *hibernation.Metadata) { m.ProtectionPrincipalID = "other" },
+		"another registration": func(m *hibernation.Metadata) { m.ProtectionRegistrationUID = "other" },
+		"another cluster":      func(m *hibernation.Metadata) { m.ProtectionClusterID = "other" },
+		"another key":          func(m *hibernation.Metadata) { m.ProtectionKeyID = "other" },
+		"another recipient":    func(m *hibernation.Metadata) { m.ProtectionRecipient = "other" },
+		"empty image":          func(m *hibernation.Metadata) { m.StateSize = 0 },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			m := saved
+			mutate(&m)
+			if validHibernationSaveProtection(m, expected) {
+				t.Fatal("substituted receipt accepted")
+			}
+		})
+	}
+	local := &cmdv1.HibernationProtection{Provider: protection.Provider, KeyID: "key", Recipient: "recipient"}
+	saved = hibernation.Metadata{FormatVersion: 2, ProtectionProvider: protection.Provider, ProtectionKeyID: "key", ProtectionRecipient: "recipient", StateSize: 42, PlaintextSize: 21}
+	if !validHibernationSaveProtection(saved, local) {
+		t.Fatal("existing local TPM format rejected")
+	}
+	saved.FormatVersion = 3
+	if validHibernationSaveProtection(saved, local) {
+		t.Fatal("remote format accepted as local")
+	}
+}
