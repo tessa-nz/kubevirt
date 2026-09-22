@@ -64,6 +64,9 @@ func TestMTLSRevocationOnExistingConnection(t *testing.T) {
 	if _, e = c.Enroll(ctx); e != nil {
 		t.Fatal(e)
 	}
+	if metrics, err := c.Metrics(ctx); err != nil || metrics["hibernation_key_service_up"] != 1 {
+		t.Fatalf("approved metrics without VM grant: %v", err)
+	}
 	certBytes, e := os.ReadFile(filepath.Join(dir, "client.crt"))
 	if e != nil {
 		t.Fatal(e)
@@ -106,6 +109,9 @@ func TestMTLSRevocationOnExistingConnection(t *testing.T) {
 	mu.Unlock()
 	if n != 1 {
 		t.Fatalf("test did not reuse connection: %d", n)
+	}
+	if _, err := c.Metrics(ctx); err == nil {
+		t.Fatal("revoked client read provider metrics")
 	}
 	// Enrollment is allowed without a certificate, key operations are not.
 	anonymous, e := c.transport(false)
@@ -272,5 +278,17 @@ func TestLostConsumptionResponseIsUncertainAndCannotReplay(t *testing.T) {
 	defer out.Close()
 	if out.Fresh || !b.status.Consumed {
 		t.Fatal("lost response replayed fresh authorization")
+	}
+}
+
+func TestProviderMetricsRejectInvalidObservations(t *testing.T) {
+	for _, body := range []string{"", "hibernation_key_service_up 0\n", "hibernation_key_service_up 1\nhibernation_key_service_tpm_reachable NaN\n", "hibernation_key_service_up 1\nhibernation_key_service_up 1\n"} {
+		if _, err := parseProviderMetrics(body); err == nil {
+			t.Fatalf("accepted invalid metrics %q", body)
+		}
+	}
+	values, err := parseProviderMetrics("hibernation_key_service_up 1\nhibernation_key_service_tpm_reachable 0\n")
+	if err != nil || values["hibernation_key_service_tpm_reachable"] != 0 {
+		t.Fatal("failed to retain explicit TPM failure", err)
 	}
 }

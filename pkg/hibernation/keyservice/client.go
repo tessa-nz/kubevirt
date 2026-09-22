@@ -16,11 +16,14 @@ import (
 	"fmt"
 	"golang.org/x/sys/unix"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -260,6 +263,64 @@ func (c *Client) Operation(ctx context.Context, r Request) (*Response, error) {
 			return nil, ErrUncertainConsumption
 		}
 		return nil, fmt.Errorf("response identity mismatch")
+	}
+	return out, nil
+}
+
+// Metrics reads bounded nonsecret provider telemetry using the same approved
+// identity as key operations. No private key is exported to a monitoring pod.
+func (c *Client) Metrics(ctx context.Context) (map[string]float64, error) {
+	client, err := c.transport(true)
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/metrics", nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("provider metrics transport failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("provider metrics rejected (HTTP %d)", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 65537))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > 65536 {
+		return nil, fmt.Errorf("provider metrics response too large")
+	}
+	return parseProviderMetrics(string(body))
+}
+
+func parseProviderMetrics(body string) (map[string]float64, error) {
+	out := map[string]float64{}
+	for _, line := range strings.Split(body, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("invalid provider metric")
+		}
+		if !strings.HasPrefix(fields[0], "hibernation_key_service_") {
+			continue
+		}
+		value, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			return nil, fmt.Errorf("invalid provider metric value")
+		}
+		if _, exists := out[fields[0]]; exists {
+			return nil, fmt.Errorf("duplicate provider metric")
+		}
+		out[fields[0]] = value
+	}
+	if out["hibernation_key_service_up"] != 1 {
+		return nil, fmt.Errorf("provider metrics readiness missing")
 	}
 	return out, nil
 }

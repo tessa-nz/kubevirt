@@ -58,6 +58,8 @@ func (c *Controller) Reconcile(ctx context.Context, name string) error {
 		return e
 	}
 	readyMetric.WithLabelValues(c.node, r.Name).Set(0)
+	clearProviderMetrics(c.node, r.Name, r.Spec.ProviderID)
+	providerScrapeMetric.WithLabelValues(c.node, r.Name, r.Spec.ProviderID).Set(0)
 	renewalFailureMetric.WithLabelValues(c.node, r.Name).Set(0)
 	updated := r.DeepCopy()
 	updated.Status.ObservedGeneration = r.Generation
@@ -85,6 +87,16 @@ func (c *Controller) Reconcile(ctx context.Context, name string) error {
 			if approved {
 				readyMetric.WithLabelValues(c.node, r.Name).Set(1)
 				expiryMetric.WithLabelValues(c.node, r.Name).Set(float64(enrollment.ExpiresAt.Unix()))
+				// Telemetry failure does not change enrollment authority or VM lifecycle.
+				if observations, metricsErr := client.Metrics(ctx); metricsErr == nil {
+					providerScrapeMetric.WithLabelValues(c.node, r.Name, r.Spec.ProviderID).Set(1)
+					providerLastSuccessMetric.WithLabelValues(c.node, r.Name, r.Spec.ProviderID).Set(float64(time.Now().Unix()))
+					for name, gauge := range providerMetrics {
+						if value, found := observations["hibernation_key_service_"+name]; found {
+							gauge.WithLabelValues(c.node, r.Name, r.Spec.ProviderID).Set(value)
+						}
+					}
+				}
 			}
 			updated.Status.CertificateExpiry = nil
 			if approved {
@@ -135,6 +147,9 @@ func (c *Controller) Run(ctx context.Context) {
 			readyMetric.DeleteLabelValues(c.node, r.Name)
 			renewalFailureMetric.DeleteLabelValues(c.node, r.Name)
 			expiryMetric.DeleteLabelValues(c.node, r.Name)
+			clearProviderMetrics(c.node, r.Name, r.Spec.ProviderID)
+			providerScrapeMetric.DeleteLabelValues(c.node, r.Name, r.Spec.ProviderID)
+			providerLastSuccessMetric.DeleteLabelValues(c.node, r.Name, r.Spec.ProviderID)
 		}
 	}, UpdateFunc: func(old, new interface{}) {
 		a := old.(*api.HibernationKeyRegistration)
