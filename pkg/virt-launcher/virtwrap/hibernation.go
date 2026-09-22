@@ -419,6 +419,10 @@ func (l *LibvirtDomainManager) commitAndUnpauseVMI(vmi *v1.VirtualMachineInstanc
 		if err := writeHibernationMetadata(statePath, metadata); err != nil {
 			return nil, "", err
 		}
+		// A lost resume response can reach this branch before clock correction
+		// was scheduled. The existing helper runs once per launcher and never
+		// authorizes another unpause or changes the consumption outcome.
+		l.setGuestTime(vmi)
 		return metadata, hibernation.StateRunningAwaitingVerification, nil
 	}
 	if !l.hibernationContext.FreshConsumption || !cli.IsPaused(state) || metadata.Consumed {
@@ -435,6 +439,10 @@ func (l *LibvirtDomainManager) commitAndUnpauseVMI(vmi *v1.VirtualMachineInstanc
 	if err := domain.Resume(); err != nil {
 		return nil, "", fmt.Errorf("consumption committed; unpause outcome unknown: %w", err)
 	}
+	// The guest agent can answer only after unpause. Reuse the bounded,
+	// asynchronous correction used by ordinary unpause; failure must not
+	// turn a running, consumed restore into a failed or replayable attempt.
+	l.setGuestTime(vmi)
 	return metadata, hibernation.StateRunningAwaitingVerification, nil
 }
 

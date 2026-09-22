@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	cmdv1 "kubevirt.io/kubevirt/pkg/handler-launcher-com/cmd/v1"
@@ -66,6 +67,7 @@ func TestCommitRecoversLostUnpauseResponseWithoutReplay(t *testing.T) {
 		domain.EXPECT().GetState().Return(libvirt.DOMAIN_RUNNING, 0, nil),
 	)
 	domain.EXPECT().Free().Return(nil).Times(2)
+	expectHibernationGuestTimeSync(t, ctrl, connection)
 	if _, _, err := manager.commitAndUnpauseVMI(vmi, statePath); err == nil || hibernation.RejectionPhase(err) != "" {
 		t.Fatalf("lost unpause response must remain an unknown outcome: %v", err)
 	}
@@ -267,6 +269,7 @@ func TestHibernationLifecycleIsTransactionalAndIdempotent(t *testing.T) {
 	domain.EXPECT().GetState().Return(libvirt.DOMAIN_PAUSED, 0, nil)
 	domain.EXPECT().Resume().Return(nil)
 	domain.EXPECT().Free().Return(nil)
+	expectHibernationGuestTimeSync(t, ctrl, connection)
 	metadata, phase, err = manager.commitAndUnpauseVMI(vmi, statePath)
 	if err != nil || phase != hibernation.StateRunningAwaitingVerification || !metadata.Consumed {
 		t.Fatalf("unexpected commit result phase=%q metadata=%+v err=%v", phase, metadata, err)
@@ -426,6 +429,7 @@ func TestHibernationProductionBuildIgnoresFaultAnnotations(t *testing.T) {
 	domain.EXPECT().GetState().Return(libvirt.DOMAIN_PAUSED, 0, nil)
 	domain.EXPECT().Resume().Return(nil)
 	domain.EXPECT().Free().Return(nil)
+	expectHibernationGuestTimeSync(t, ctrl, connection)
 	metadata, phase, err := manager.commitAndUnpauseVMI(vmi, path)
 	if err != nil || !metadata.Consumed || phase != hibernation.StateRunningAwaitingVerification {
 		t.Fatalf("lab annotations affected production operation: %s %v", phase, err)
@@ -462,6 +466,94 @@ func TestHibernationBlocksOrdinarySyncAndMigration(t *testing.T) {
 	vmi.Annotations = map[string]string{hibernation.StatePVCAnnotation: "state"}
 	if err := manager.MigrateVMI(vmi, nil); err == nil {
 		t.Fatal("migration accepted state-configured VMI")
+	}
+}
+
+// Clock correction uses a separate asynchronous libvirt reference. Wait for its
+// release before gomock teardown so these tests also verify completion.
+func expectHibernationGuestTimeSync(t *testing.T, ctrl *gomock.Controller, connection *cli.MockConnection, failures ...error) <-chan struct{} {
+	t.Helper()
+	clockDomain := cli.NewMockVirDomain(ctrl)
+	connection.EXPECT().LookupDomainByName("default_tracer").Return(clockDomain, nil)
+	var calls []any
+	for _, failure := range failures {
+		calls = append(calls, clockDomain.EXPECT().SetTime(gomock.Any(), gomock.Any(), libvirt.DomainSetTimeFlags(0)).Return(failure))
+	}
+	if len(failures) == 0 || failures[len(failures)-1] != (libvirt.Error{Code: libvirt.ERR_OPERATION_UNSUPPORTED}) {
+		calls = append(calls, clockDomain.EXPECT().SetTime(gomock.Any(), gomock.Any(), libvirt.DomainSetTimeFlags(0)).DoAndReturn(func(seconds int64, nanoseconds uint, _ libvirt.DomainSetTimeFlags) error {
+			if delta := time.Since(time.Unix(seconds, int64(nanoseconds))); delta < -time.Second || delta > time.Second {
+				t.Errorf("guest clock was not set to current host time: delta=%s", delta)
+			}
+			return nil
+		}))
+	}
+	gomock.InOrder(calls...)
+	done := make(chan struct{})
+	clockDomain.EXPECT().Free().DoAndReturn(func() error { close(done); return nil })
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("guest clock correction did not finish")
+		}
+	})
+	return done
+}
+
+func TestHibernationClockCorrectionDoesNotReplayResume(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   libvirt.DomainState
+		failure error
+	}{
+		{"fresh resume retries reconnecting agent", libvirt.DOMAIN_PAUSED, libvirt.Error{Code: libvirt.ERR_AGENT_UNRESPONSIVE}},
+		{"recovered running domain", libvirt.DOMAIN_RUNNING, nil},
+		{"unsupported clock operation keeps guest running", libvirt.DOMAIN_PAUSED, libvirt.Error{Code: libvirt.ERR_OPERATION_UNSUPPORTED}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			connection := cli.NewMockConnection(ctrl)
+			domain := cli.NewMockVirDomain(ctrl)
+			manager := protectedHibernationManager(t, connection)
+			manager.hibernationContext.FreshConsumption = tc.state == libvirt.DOMAIN_PAUSED
+			statePath := filepath.Join(t.TempDir(), "state.save")
+			if err := writeHibernationMetadata(statePath, &hibernation.Metadata{AttemptID: "attempt-1", Consumed: tc.state == libvirt.DOMAIN_RUNNING}); err != nil {
+				t.Fatal(err)
+			}
+			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tracer", Annotations: map[string]string{hibernation.AttemptAnnotation: "attempt-1"}}}
+			anchorHibernationFixture(t, vmi, statePath)
+			// Two reconciliations share one time correction. Only the fresh,
+			// paused case may issue Resume, and it may do so exactly once.
+			connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+			domain.EXPECT().GetState().Return(tc.state, 0, nil)
+			if tc.state == libvirt.DOMAIN_PAUSED {
+				domain.EXPECT().Resume().Return(nil)
+			}
+			domain.EXPECT().Free().Return(nil)
+			var done <-chan struct{}
+			if tc.failure == nil {
+				done = expectHibernationGuestTimeSync(t, ctrl, connection)
+			} else {
+				done = expectHibernationGuestTimeSync(t, ctrl, connection, tc.failure)
+			}
+			metadata, phase, err := manager.commitAndUnpauseVMI(vmi, statePath)
+			if err != nil || !metadata.Consumed || phase != hibernation.StateRunningAwaitingVerification {
+				t.Fatalf("clock correction changed restore result: phase=%s err=%v", phase, err)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("guest clock correction did not finish")
+			}
+			manager.hibernationContext.FreshConsumption = false
+			connection.EXPECT().LookupDomainByName("default_tracer").Return(domain, nil)
+			domain.EXPECT().GetState().Return(libvirt.DOMAIN_RUNNING, 0, nil)
+			domain.EXPECT().Free().Return(nil)
+			metadata, phase, err = manager.commitAndUnpauseVMI(vmi, statePath)
+			if err != nil || !metadata.Consumed || phase != hibernation.StateRunningAwaitingVerification {
+				t.Fatalf("reconciliation changed restore result: phase=%s err=%v", phase, err)
+			}
+		})
 	}
 }
 
