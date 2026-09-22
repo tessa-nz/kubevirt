@@ -2478,6 +2478,13 @@ func isACPIEnabled(vmi *v1.VirtualMachineInstance, domain *api.Domain) bool {
 func (c *VirtualMachineController) calculateVmPhaseForStatusReason(domain *api.Domain, vmi *v1.VirtualMachineInstance) (v1.VirtualMachineInstancePhase, error) {
 
 	if domain == nil {
+		// A restored libvirt domain may be transient and disappear after save.
+		// A validated, committed hibernation receipt makes that disappearance
+		// expected. Never infer success for an incomplete or uncertain save.
+		if vmi.IsRunning() && vmi.Annotations[hibernation.StateAnnotation] == hibernation.StateHibernated &&
+			vmi.Annotations[hibernation.AttemptAnnotation] != "" && vmi.Annotations[hibernation.ArtifactDigestAnnotation] != "" {
+			return v1.Succeeded, nil
+		}
 		if vmi.IsMigrationTarget() && vmi.Status.MigrationState != nil && vmi.Status.MigrationState.Failed {
 			return vmi.Status.Phase, nil
 		}

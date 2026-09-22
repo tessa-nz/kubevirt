@@ -485,3 +485,29 @@ func TestSaveReceiptCannotDropOrSubstituteKernelQualification(t *testing.T) {
 		t.Fatal("missing qualification accepted")
 	}
 }
+
+func TestCommittedHibernationDisappearingDomainIsSuccessful(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, attempt, digest string
+		domain                       *api.Domain
+		want                         v1.VirtualMachineInstancePhase
+	}{
+		{"committed transient save", hibernation.StateHibernated, "attempt", "digest", nil, v1.Succeeded},
+		{"ordinary disappearance", "", "", "", nil, v1.Failed},
+		{"uncertain save", hibernation.StateSaving, "attempt", "digest", nil, v1.Failed},
+		{"incomplete save", hibernation.StateSaveIncomplete, "attempt", "digest", nil, v1.Failed},
+		{"missing receipt", hibernation.StateHibernated, "attempt", "", nil, v1.Failed},
+		{"missing attempt", hibernation.StateHibernated, "", "digest", nil, v1.Failed},
+		{"actual crash remains failure", hibernation.StateHibernated, "attempt", "digest", &api.Domain{Status: api.DomainStatus{Status: api.Crashed, Reason: api.ReasonCrashed}}, v1.Failed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vmi := &v1.VirtualMachineInstance{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+				hibernation.StateAnnotation: tc.state, hibernation.AttemptAnnotation: tc.attempt, hibernation.ArtifactDigestAnnotation: tc.digest,
+			}}, Status: v1.VirtualMachineInstanceStatus{Phase: v1.Running}}
+			phase, err := (&VirtualMachineController{}).calculateVmPhaseForStatusReason(tc.domain, vmi)
+			if err != nil || phase != tc.want {
+				t.Fatalf("phase = %s, error = %v; want %s", phase, err, tc.want)
+			}
+		})
+	}
+}
