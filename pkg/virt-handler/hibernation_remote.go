@@ -31,6 +31,18 @@ func (c *VirtualMachineController) hibernationStore(vmi *v1.VirtualMachineInstan
 		return nil, nil, e
 	}
 	result := &cmdv1.HibernationProtection{Provider: protection.RemoteProvider, ProviderID: client.ProviderID, PrincipalID: client.PrincipalID, RegistrationUID: string(r.UID), ClusterID: client.Enrollment.ClusterID}
+	for _, qualification := range r.Spec.KernelQualifications {
+		if qualification.VMUID != vmi.Annotations[hibernation.VMUIDAnnotation] {
+			continue
+		}
+		result.QualificationVMUID = qualification.VMUID
+		result.QualificationNodeUID = r.Spec.NodeUID
+		result.QualificationSourceKernel = qualification.SourceKernel
+		result.QualificationTargetKernel = qualification.TargetKernel
+		if !kernelQualificationFromProtection(result).Valid() {
+			return nil, nil, fmt.Errorf("invalid kernel qualification")
+		}
+	}
 	return &remoteHibernationStore{client: client, restoreVMIUID: string(vmi.UID), artifactDigest: vmi.Annotations[hibernation.ArtifactDigestAnnotation]}, result, nil
 }
 
@@ -99,7 +111,7 @@ func (r *remoteHibernationStore) Discard(a protection.Attempt) error { return r.
 // Validate the launcher receipt against the authority selected before saving.
 // Remote format 3 must never inherit the interpretation of local format 2.
 func validHibernationSaveProtection(m hibernation.Metadata, expected *cmdv1.HibernationProtection) bool {
-	if expected == nil || expected.KeyID == "" || expected.Recipient == "" || m.ProtectionProvider != expected.Provider || m.ProtectionKeyID != expected.KeyID || m.ProtectionRecipient != expected.Recipient || m.StateSize <= 0 || m.PlaintextSize <= 0 {
+	if expected == nil || !hibernation.SameKernelQualification(m.KernelQualification, kernelQualificationFromProtection(expected)) || expected.KeyID == "" || expected.Recipient == "" || m.ProtectionProvider != expected.Provider || m.ProtectionKeyID != expected.KeyID || m.ProtectionRecipient != expected.Recipient || m.StateSize <= 0 || m.PlaintextSize <= 0 {
 		return false
 	}
 	switch expected.Provider {
@@ -110,4 +122,11 @@ func validHibernationSaveProtection(m hibernation.Metadata, expected *cmdv1.Hibe
 	default:
 		return false
 	}
+}
+
+func kernelQualificationFromProtection(c *cmdv1.HibernationProtection) *hibernation.KernelQualification {
+	if c == nil || (c.QualificationVMUID == "" && c.QualificationNodeUID == "" && c.QualificationSourceKernel == "" && c.QualificationTargetKernel == "") {
+		return nil
+	}
+	return &hibernation.KernelQualification{VMUID: c.QualificationVMUID, NodeUID: c.QualificationNodeUID, SourceKernel: c.QualificationSourceKernel, TargetKernel: c.QualificationTargetKernel}
 }

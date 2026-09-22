@@ -47,6 +47,12 @@ type HibernationKeyRegistrationSpec struct {
 	// +listType=map
 	// +listMapKey=vmUID
 	RequestedVMs []RequestedVM `json:"requestedVMs,omitempty"`
+	// KernelQualifications authorize controlled experiments for exact VM UIDs.
+	// They do not grant key access or certify a transition for production.
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=map
+	// +listMapKey=vmUID
+	KernelQualifications []KernelQualification `json:"kernelQualifications,omitempty"`
 }
 type RequestedVM struct {
 	// +kubebuilder:validation:MinLength=1
@@ -72,4 +78,18 @@ type HibernationKeyRegistrationStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// KernelQualification is an exact, directional kernel experiment selected by an administrator.
+// +kubebuilder:validation:XValidation:rule="self.sourceKernel != self.targetKernel",message="qualification requires different kernels"
+type KernelQualification struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	VMUID string `json:"vmUID"`
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._+-]*$`
+	// +kubebuilder:validation:MaxLength=128
+	SourceKernel string `json:"sourceKernel"`
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._+-]*$`
+	// +kubebuilder:validation:MaxLength=128
+	TargetKernel string `json:"targetKernel"`
 }

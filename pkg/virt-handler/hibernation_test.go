@@ -469,3 +469,19 @@ func TestSaveReceiptAcceptsRemoteFormatAndRejectsAuthoritySubstitution(t *testin
 		t.Fatal("remote format accepted as local")
 	}
 }
+
+func TestSaveReceiptCannotDropOrSubstituteKernelQualification(t *testing.T) {
+	c := &cmdv1.HibernationProtection{Provider: protection.RemoteProvider, ProviderID: "provider", PrincipalID: "principal", RegistrationUID: "registration", ClusterID: "cluster", KeyID: "key", Recipient: "recipient", QualificationVMUID: "vm", QualificationNodeUID: "node", QualificationSourceKernel: "kernel-a", QualificationTargetKernel: "kernel-b"}
+	m := hibernation.Metadata{FormatVersion: 3, ProtectionProvider: c.Provider, ProtectionProviderID: c.ProviderID, ProtectionPrincipalID: c.PrincipalID, ProtectionRegistrationUID: c.RegistrationUID, ProtectionClusterID: c.ClusterID, ProtectionKeyID: c.KeyID, ProtectionRecipient: c.Recipient, StateSize: 42, PlaintextSize: 21, KernelQualification: kernelQualificationFromProtection(c)}
+	if !validHibernationSaveProtection(m, c) {
+		t.Fatal("qualified remote receipt rejected")
+	}
+	m.KernelQualification.TargetKernel = "other"
+	if validHibernationSaveProtection(m, c) {
+		t.Fatal("substituted qualification accepted")
+	}
+	m.KernelQualification = nil
+	if validHibernationSaveProtection(m, c) {
+		t.Fatal("missing qualification accepted")
+	}
+}

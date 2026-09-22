@@ -690,3 +690,25 @@ func TestHibernationRemoteAuthorityCannotDowngradeOrChangeBinding(t *testing.T) 
 		t.Fatal("legacy local artifact rejected")
 	}
 }
+
+func TestRemoteArtifactQualificationCannotBeAddedOrChangedAfterSave(t *testing.T) {
+	c := &cmdv1.HibernationProtection{Provider: protection.RemoteProvider, ProviderID: "provider", PrincipalID: "principal", RegistrationUID: "registration", ClusterID: "cluster", QualificationVMUID: "vm", QualificationNodeUID: "node", QualificationSourceKernel: "kernel-a", QualificationTargetKernel: "kernel-b"}
+	manager := &LibvirtDomainManager{hibernationContext: c}
+	m := &hibernation.Metadata{FormatVersion: 3, ProtectionProvider: c.Provider, ProtectionProviderID: c.ProviderID, ProtectionPrincipalID: c.PrincipalID, ProtectionRegistrationUID: c.RegistrationUID, ProtectionClusterID: c.ClusterID}
+	if manager.hibernationAuthorityMatches(m) {
+		t.Fatal("qualification retroactively added to old artifact")
+	}
+	m.KernelQualification = manager.kernelQualification()
+	if !manager.hibernationAuthorityMatches(m) {
+		t.Fatal("bound qualification rejected")
+	}
+	c.QualificationTargetKernel = "other"
+	if manager.hibernationAuthorityMatches(m) {
+		t.Fatal("changed target authorized")
+	}
+	c.QualificationTargetKernel = "kernel-b"
+	c.QualificationNodeUID = "other"
+	if manager.hibernationAuthorityMatches(m) {
+		t.Fatal("replaced node authorized")
+	}
+}

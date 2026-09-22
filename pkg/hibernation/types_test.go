@@ -79,3 +79,75 @@ func TestOnlyRestoreStatesAdoptAnEmptyDomainUID(t *testing.T) {
 		}
 	}
 }
+
+func TestKernelQualificationIsDirectionalAndKeepsOtherCompatibilityChecks(t *testing.T) {
+	saved, current := compatibleMetadata(), compatibleMetadata()
+	q := &KernelQualification{VMUID: "vm", NodeUID: "node-uid", SourceKernel: "kernel-a", TargetKernel: "kernel-b"}
+	saved.KernelQualification, current.KernelQualification = q, q
+	current.HostKernelRelease, current.KVMFingerprint = "kernel-b", "new-kvm"
+	if !KernelQualificationAllows(saved, current) || ValidateCompatibility(saved, current, CompatibilityOptions{}) != nil {
+		t.Fatal("explicit directional qualification rejected")
+	}
+	for name, mutate := range map[string]func(*Metadata){
+		"other kernel":            func(m *Metadata) { m.HostKernelRelease = "kernel-c" },
+		"other VM":                func(m *Metadata) { m.VMUID = "other" },
+		"other node":              func(m *Metadata) { m.NodeName = "other" },
+		"other CPU":               func(m *Metadata) { m.CPUFeatures = "other" },
+		"other microcode":         func(m *Metadata) { m.Microcode = "other" },
+		"other QEMU":              func(m *Metadata) { m.QEMUVersion = "other" },
+		"other libvirt":           func(m *Metadata) { m.LibvirtVersion = "other" },
+		"other release":           func(m *Metadata) { m.KubeVirtVersion = "other" },
+		"withdrawn qualification": func(m *Metadata) { m.KernelQualification = nil },
+		"replaced node UID":       func(m *Metadata) { x := *q; x.NodeUID = "other"; m.KernelQualification = &x },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := current
+			mutate(&changed)
+			if ValidateCompatibility(saved, changed, CompatibilityOptions{}) == nil {
+				t.Fatal("unqualified compatibility change accepted")
+			}
+		})
+	}
+	if KernelQualificationAllows(current, saved) {
+		t.Fatal("qualification authorized reverse direction")
+	}
+	// Rolling back before consumption keeps the original strict same-kernel path.
+	current = saved
+	if ValidateCompatibility(saved, current, CompatibilityOptions{}) != nil {
+		t.Fatal("same-kernel rollback rejected")
+	}
+	saved.KernelQualification, current.KernelQualification = nil, nil
+	current.HostKernelRelease = "kernel-b"
+	if ValidateCompatibility(saved, current, CompatibilityOptions{}) == nil {
+		t.Fatal("default kernel rejection changed")
+	}
+}
+
+func TestKernelQualificationIsCoveredByArtifactIntegrity(t *testing.T) {
+	m := compatibleMetadata()
+	m.KernelQualification = &KernelQualification{VMUID: "vm", NodeUID: "node", SourceKernel: "kernel-a", TargetKernel: "kernel-b"}
+	before, _ := ArtifactDigest(m)
+	for _, field := range []string{"VMUID", "NodeUID", "SourceKernel", "TargetKernel"} {
+		x := *m.KernelQualification
+		switch field {
+		case "VMUID":
+			x.VMUID = "other"
+		case "NodeUID":
+			x.NodeUID = "other"
+		case "SourceKernel":
+			x.SourceKernel = "other"
+		case "TargetKernel":
+			x.TargetKernel = "other"
+		}
+		changed := m
+		changed.KernelQualification = &x
+		after, _ := ArtifactDigest(changed)
+		if before == after {
+			t.Fatalf("%s is outside artifact integrity", field)
+		}
+	}
+	m.KernelQualification.TargetKernel = "*"
+	if m.KernelQualification.Valid() {
+		t.Fatal("wildcard kernel qualification accepted")
+	}
+}

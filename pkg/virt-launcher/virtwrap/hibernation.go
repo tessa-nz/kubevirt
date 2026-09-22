@@ -160,6 +160,9 @@ func (l *LibvirtDomainManager) saveVMI(vmi *v1.VirtualMachineInstance, statePath
 		if err != nil {
 			return nil, "", err
 		}
+		if q := metadata.KernelQualification; q != nil && (!q.Valid() || q.VMUID != metadata.VMUID || q.SourceKernel != metadata.HostKernelRelease || l.hibernationContext.Provider != protection.RemoteProvider) {
+			return nil, "", l.rejectSave(vmi, fmt.Errorf("kernel qualification does not match the saving VM and source kernel"))
+		}
 		metadata.ProtectionProvider, metadata.ProtectionKeyID, metadata.ProtectionRecipient = l.hibernationContext.Provider, key.ID, key.Recipient
 		if l.hibernationContext.Provider == protection.RemoteProvider {
 			metadata.FormatVersion = 3
@@ -266,7 +269,7 @@ func (l *LibvirtDomainManager) restoreVMI(vmi *v1.VirtualMachineInstance, stateP
 		return nil, "", err
 	}
 	compatibilityMismatch := metadata.HostKernelRelease != current.HostKernelRelease || metadata.KVMFingerprint != current.KVMFingerprint
-	overrideRequested := allowKernelMismatch && compatibilityMismatch
+	overrideRequested := compatibilityMismatch && (allowKernelMismatch || hibernation.KernelQualificationAllows(*metadata, *current))
 	if err := hibernation.ValidateCompatibility(*metadata, *current, hibernation.CompatibilityOptions{AllowKernelMismatch: overrideRequested}); err != nil {
 		return nil, "", hibernation.Reject(hibernation.StateResumeRejected, err)
 	}
@@ -302,7 +305,7 @@ func (l *LibvirtDomainManager) restoreVMI(vmi *v1.VirtualMachineInstance, stateP
 	}
 	if overrideRequested {
 		if metadata.OverrideAttempted {
-			return nil, "", hibernation.Reject(hibernation.StateResumeRejected, fmt.Errorf("lab compatibility override was already attempted for this artifact"))
+			return nil, "", hibernation.Reject(hibernation.StateResumeRejected, fmt.Errorf("kernel compatibility qualification was already attempted for this artifact"))
 		}
 		metadata.OverrideAttempted = true
 		metadata.OverrideKernel = current.HostKernelRelease
@@ -538,20 +541,21 @@ func (l *LibvirtDomainManager) currentMetadata(vmi *v1.VirtualMachineInstance) (
 		return nil, fmt.Errorf("attempt ID and VM UID annotations are required")
 	}
 	return &hibernation.Metadata{
-		FormatVersion:     2,
-		AttemptID:         attemptID,
-		VMUID:             vmUID,
-		EffectiveSpecHash: specHash,
-		PVCIdentities:     pvcIdentities,
-		NodeName:          vmi.Status.NodeName,
-		CPUModel:          cpuModel,
-		CPUFeatures:       hibernation.HashBytes([]byte(stableCPUFingerprint(cpuInfo))),
-		HostKernelRelease: kernel,
-		KVMFingerprint:    kvmFingerprint,
-		Microcode:         microcode,
-		KubeVirtVersion:   build.GitVersion + "+" + build.GitCommit,
-		QEMUVersion:       qemuVersion,
-		LibvirtVersion:    fmt.Sprintf("%d", libvirtVersion),
+		FormatVersion:       2,
+		KernelQualification: l.kernelQualification(),
+		AttemptID:           attemptID,
+		VMUID:               vmUID,
+		EffectiveSpecHash:   specHash,
+		PVCIdentities:       pvcIdentities,
+		NodeName:            vmi.Status.NodeName,
+		CPUModel:            cpuModel,
+		CPUFeatures:         hibernation.HashBytes([]byte(stableCPUFingerprint(cpuInfo))),
+		HostKernelRelease:   kernel,
+		KVMFingerprint:      kvmFingerprint,
+		Microcode:           microcode,
+		KubeVirtVersion:     build.GitVersion + "+" + build.GitCommit,
+		QEMUVersion:         qemuVersion,
+		LibvirtVersion:      fmt.Sprintf("%d", libvirtVersion),
 	}, nil
 }
 

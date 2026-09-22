@@ -32,6 +32,35 @@ spec:
                 maxLength: 2048
                 pattern: ^https://[^/?#@]+$
                 type: string
+              kernelQualifications:
+                items:
+                  properties:
+                    sourceKernel:
+                      maxLength: 128
+                      pattern: ^[a-zA-Z0-9][a-zA-Z0-9._+-]*$
+                      type: string
+                    targetKernel:
+                      maxLength: 128
+                      pattern: ^[a-zA-Z0-9][a-zA-Z0-9._+-]*$
+                      type: string
+                    vmUID:
+                      maxLength: 128
+                      minLength: 1
+                      pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]*$
+                      type: string
+                  required:
+                  - vmUID
+                  - sourceKernel
+                  - targetKernel
+                  type: object
+                  x-kubernetes-validations:
+                  - message: qualification requires different kernels
+                    rule: self.sourceKernel != self.targetKernel
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - vmUID
+                x-kubernetes-list-type: map
               nodeName:
                 maxLength: 253
                 minLength: 1

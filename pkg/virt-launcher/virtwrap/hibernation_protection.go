@@ -289,11 +289,19 @@ func (l *LibvirtDomainManager) completeHibernationStage(vmi *v1.VirtualMachineIn
 
 func (l *LibvirtDomainManager) hibernationAuthorityMatches(m *hibernation.Metadata) bool {
 	c := l.hibernationContext
-	if c == nil || m.ProtectionProvider != c.Provider {
+	if c == nil || m.ProtectionProvider != c.Provider || !hibernation.SameKernelQualification(m.KernelQualification, l.kernelQualification()) {
 		return false
 	}
 	if c.Provider == protection.Provider {
 		return m.FormatVersion == 2 && m.ProtectionProviderID == "" && m.ProtectionPrincipalID == "" && m.ProtectionRegistrationUID == "" && m.ProtectionClusterID == ""
 	}
 	return c.Provider == protection.RemoteProvider && m.FormatVersion == 3 && m.ProtectionProviderID == c.ProviderID && m.ProtectionPrincipalID == c.PrincipalID && m.ProtectionRegistrationUID == c.RegistrationUID && m.ProtectionClusterID == c.ClusterID
+}
+
+func (l *LibvirtDomainManager) kernelQualification() *hibernation.KernelQualification {
+	c := l.hibernationContext
+	if c == nil || (c.QualificationVMUID == "" && c.QualificationNodeUID == "" && c.QualificationSourceKernel == "" && c.QualificationTargetKernel == "") {
+		return nil
+	}
+	return &hibernation.KernelQualification{VMUID: c.QualificationVMUID, NodeUID: c.QualificationNodeUID, SourceKernel: c.QualificationSourceKernel, TargetKernel: c.QualificationTargetKernel}
 }

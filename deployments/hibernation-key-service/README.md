@@ -81,3 +81,40 @@ registration in `resourceNames`; ordinary VM edit permissions are insufficient.
 The VM must select the registered node's `kubernetes.io/hostname` label. Its
 registration annotation cannot change during an active attempt, even for a
 trusted controller.
+
+## Scoped cross-kernel experiments
+
+An administrator may set `spec.kernelQualifications` on a remote registration:
+
+```yaml
+kernelQualifications:
+  - vmUID: <disposable-vm-uid>
+    sourceKernel: 6.18.39-talos
+    targetKernel: 6.18.51-talos
+```
+
+This permits an experiment for that exact VM UID and forward kernel pair; it
+is not a compatibility guarantee or a service-side VM grant. The registration's
+verified Node UID and the qualification are frozen into the artifact's integrity
+digest at save time. Adding a qualification after saving cannot authorize an
+existing artifact. Changing or withdrawing it blocks restoration; preserve the
+original registration configuration until the attempt is finalized or discarded.
+
+The experiment allows the kernel and KVM fingerprint to differ. CPU features,
+microcode, node, storage identities, VM specification and exact KubeVirt/QEMU/
+libvirt builds must still match. No wildcard, reverse transition, other VM or
+replacement node is allowed. Guests without a qualification retain strict kernel
+matching. The normal release does not enable the broad laboratory override.
+
+Only one experimental native restore is attempted per artifact. A confirmed
+already-paused domain can reconcile, but a lost consumption result never grants
+another unpause. Same-kernel baseline restoration remains supported. Returning to
+the source kernel can be considered only while the key is unconsumed and all
+normal compatibility checks pass. Never cold-start automatically after failure.
+
+Use a fresh disposable guest on the qualification release, prove the same-kernel
+save/restore/finalization cycle, then save a new attempt before the separately
+authorized host upgrade. Verify boot continuity, unlocked encrypted storage,
+data checks and sustained writes after restoration. Record the exact kernel pair
+and builds; one successful experiment does not qualify other pairs or production
+workloads. A launcher release change itself invalidates prior saved build identity.

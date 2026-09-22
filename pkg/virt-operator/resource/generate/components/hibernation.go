@@ -36,8 +36,13 @@ func NewHibernationKeyRegistrationCrd() (*extv1.CustomResourceDefinition, error)
 		"observedGeneration": {Type: "integer", Format: "int64"}, "reason": str(1024), "message": str(32768), "lastTransitionTime": {Type: "string", Format: "date-time"}}}
 	mapType := "map"
 	maxConditions := int64(5)
+	kernel := str(128)
+	kernel.Pattern = `^[a-zA-Z0-9][a-zA-Z0-9._+-]*$`
+	qualification := extv1.JSONSchemaProps{Type: "object", Required: []string{"vmUID", "sourceKernel", "targetKernel"}, Properties: map[string]extv1.JSONSchemaProps{"vmUID": id, "sourceKernel": kernel, "targetKernel": kernel}, XValidations: extv1.ValidationRules{{Rule: "self.sourceKernel != self.targetKernel", Message: "qualification requires different kernels"}}}
+	maxQualifications := int64(32)
+	qualifications := extv1.JSONSchemaProps{Type: "array", MaxItems: &maxQualifications, XListType: &mapType, XListMapKeys: []string{"vmUID"}, Items: &extv1.JSONSchemaPropsOrArray{Schema: &qualification}}
 	spec := extv1.JSONSchemaProps{Type: "object", Required: []string{"endpoint", "serverCA", "providerID", "nodeName", "nodeUID"}, Properties: map[string]extv1.JSONSchemaProps{
-		"endpoint": endpoint, "serverCA": ca, "providerID": immutable(provider), "nodeName": immutable(node), "nodeUID": immutable(id), "requestedVMs": requested}}
+		"endpoint": endpoint, "serverCA": ca, "providerID": immutable(provider), "nodeName": immutable(node), "nodeUID": immutable(id), "requestedVMs": requested, "kernelQualifications": qualifications}}
 	status := extv1.JSONSchemaProps{Type: "object", Properties: map[string]extv1.JSONSchemaProps{
 		"observedGeneration": {Type: "integer", Format: "int64"}, "clusterID": id, "nodeUID": id, "clientFingerprint": str(64), "enrollmentRequestID": str(64), "certificateExpiry": {Type: "string", Format: "date-time"},
 		"effectiveGrants": {Type: "array", MaxItems: &maxItems, Items: &extv1.JSONSchemaPropsOrArray{Schema: &grant}},

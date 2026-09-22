@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
 
 const (
@@ -74,45 +75,71 @@ const (
 	VMIConditionType = "KubeVirtHibernation"
 )
 
+// KernelQualification is frozen into the authenticated artifact, not an assertion
+// of compatibility. Other hardware/software checks still apply to the experiment.
+type KernelQualification struct {
+	VMUID        string `json:"vmUID"`
+	NodeUID      string `json:"nodeUID"`
+	SourceKernel string `json:"sourceKernel"`
+	TargetKernel string `json:"targetKernel"`
+}
+
+var qualificationKernelPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._+-]*$`)
+
+func (q *KernelQualification) Valid() bool {
+	return q != nil && q.VMUID != "" && q.NodeUID != "" && len(q.SourceKernel) <= 128 && len(q.TargetKernel) <= 128 && q.SourceKernel != q.TargetKernel && qualificationKernelPattern.MatchString(q.SourceKernel) && qualificationKernelPattern.MatchString(q.TargetKernel)
+}
+func SameKernelQualification(a, b *KernelQualification) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+func KernelQualificationAllows(saved, current Metadata) bool {
+	q := saved.KernelQualification
+	return q.Valid() && SameKernelQualification(q, current.KernelQualification) && q.VMUID == saved.VMUID && q.VMUID == current.VMUID && saved.HostKernelRelease == q.SourceKernel && current.HostKernelRelease == q.TargetKernel
+}
+
 type Metadata struct {
-	ProtectionProviderID      string            `json:"protectionProviderID,omitempty"`
-	ProtectionPrincipalID     string            `json:"protectionPrincipalID,omitempty"`
-	ProtectionRegistrationUID string            `json:"protectionRegistrationUID,omitempty"`
-	ProtectionClusterID       string            `json:"protectionClusterID,omitempty"`
-	FormatVersion             int               `json:"formatVersion"`
-	Completed                 bool              `json:"completed"`
-	Consumed                  bool              `json:"consumed"`
-	AttemptID                 string            `json:"attemptID"`
-	VMUID                     string            `json:"vmUID"`
-	SourceVMIUID              string            `json:"sourceVMIUID"`
-	EffectiveSpecHash         string            `json:"effectiveSpecHash"`
-	DomainXMLHash             string            `json:"domainXMLHash"`
-	StateSHA256               string            `json:"stateSHA256"`
-	StateSize                 int64             `json:"stateSize"`
-	PlaintextSHA256           string            `json:"plaintextSHA256,omitempty"`
-	PlaintextSize             int64             `json:"plaintextSize,omitempty"`
-	ProtectionProvider        string            `json:"protectionProvider,omitempty"`
-	ProtectionKeyID           string            `json:"protectionKeyID,omitempty"`
-	ProtectionRecipient       string            `json:"protectionRecipient,omitempty"`
-	PVCIdentities             map[string]string `json:"pvcIdentities"`
-	NodeName                  string            `json:"nodeName"`
-	CPUModel                  string            `json:"cpuModel"`
-	CPUFeatures               string            `json:"cpuFeatures"`
-	HostKernelRelease         string            `json:"hostKernelRelease"`
-	KVMFingerprint            string            `json:"kvmFingerprint"`
-	Microcode                 string            `json:"microcode"`
-	KubeVirtVersion           string            `json:"kubeVirtVersion"`
-	QEMUVersion               string            `json:"qemuVersion"`
-	LibvirtVersion            string            `json:"libvirtVersion"`
-	CreatedAt                 string            `json:"createdAt"`
-	CompletedAt               string            `json:"completedAt"`
-	ConsumedAt                string            `json:"consumedAt,omitempty"`
-	ErasedAt                  string            `json:"erasedAt,omitempty"`
-	DiscardedAt               string            `json:"discardedAt,omitempty"`
-	ValidatedKernelPair       string            `json:"validatedKernelPair,omitempty"`
-	OverrideAttempted         bool              `json:"compatibilityOverrideAttempted,omitempty"`
-	OverrideKernel            string            `json:"compatibilityOverrideKernel,omitempty"`
-	OverrideKVM               string            `json:"compatibilityOverrideKVM,omitempty"`
+	KernelQualification       *KernelQualification `json:"kernelQualification,omitempty"`
+	ProtectionProviderID      string               `json:"protectionProviderID,omitempty"`
+	ProtectionPrincipalID     string               `json:"protectionPrincipalID,omitempty"`
+	ProtectionRegistrationUID string               `json:"protectionRegistrationUID,omitempty"`
+	ProtectionClusterID       string               `json:"protectionClusterID,omitempty"`
+	FormatVersion             int                  `json:"formatVersion"`
+	Completed                 bool                 `json:"completed"`
+	Consumed                  bool                 `json:"consumed"`
+	AttemptID                 string               `json:"attemptID"`
+	VMUID                     string               `json:"vmUID"`
+	SourceVMIUID              string               `json:"sourceVMIUID"`
+	EffectiveSpecHash         string               `json:"effectiveSpecHash"`
+	DomainXMLHash             string               `json:"domainXMLHash"`
+	StateSHA256               string               `json:"stateSHA256"`
+	StateSize                 int64                `json:"stateSize"`
+	PlaintextSHA256           string               `json:"plaintextSHA256,omitempty"`
+	PlaintextSize             int64                `json:"plaintextSize,omitempty"`
+	ProtectionProvider        string               `json:"protectionProvider,omitempty"`
+	ProtectionKeyID           string               `json:"protectionKeyID,omitempty"`
+	ProtectionRecipient       string               `json:"protectionRecipient,omitempty"`
+	PVCIdentities             map[string]string    `json:"pvcIdentities"`
+	NodeName                  string               `json:"nodeName"`
+	CPUModel                  string               `json:"cpuModel"`
+	CPUFeatures               string               `json:"cpuFeatures"`
+	HostKernelRelease         string               `json:"hostKernelRelease"`
+	KVMFingerprint            string               `json:"kvmFingerprint"`
+	Microcode                 string               `json:"microcode"`
+	KubeVirtVersion           string               `json:"kubeVirtVersion"`
+	QEMUVersion               string               `json:"qemuVersion"`
+	LibvirtVersion            string               `json:"libvirtVersion"`
+	CreatedAt                 string               `json:"createdAt"`
+	CompletedAt               string               `json:"completedAt"`
+	ConsumedAt                string               `json:"consumedAt,omitempty"`
+	ErasedAt                  string               `json:"erasedAt,omitempty"`
+	DiscardedAt               string               `json:"discardedAt,omitempty"`
+	ValidatedKernelPair       string               `json:"validatedKernelPair,omitempty"`
+	OverrideAttempted         bool                 `json:"compatibilityOverrideAttempted,omitempty"`
+	OverrideKernel            string               `json:"compatibilityOverrideKernel,omitempty"`
+	OverrideKVM               string               `json:"compatibilityOverrideKVM,omitempty"`
 }
 
 type CompatibilityOptions struct {
@@ -148,6 +175,12 @@ func ArtifactDigest(metadata Metadata) (string, error) {
 }
 
 func ValidateCompatibility(saved, current Metadata, options CompatibilityOptions) error {
+	if !SameKernelQualification(saved.KernelQualification, current.KernelQualification) {
+		return fmt.Errorf("kernel qualification binding changed")
+	}
+	if q := saved.KernelQualification; q != nil && (!q.Valid() || q.VMUID != saved.VMUID || q.SourceKernel != saved.HostKernelRelease) {
+		return fmt.Errorf("invalid saved kernel qualification")
+	}
 	checks := []struct {
 		name    string
 		saved   string
@@ -164,7 +197,7 @@ func ValidateCompatibility(saved, current Metadata, options CompatibilityOptions
 		{"QEMU build", saved.QEMUVersion, current.QEMUVersion},
 		{"libvirt build", saved.LibvirtVersion, current.LibvirtVersion},
 	}
-	if !options.AllowKernelMismatch {
+	if !options.AllowKernelMismatch && !KernelQualificationAllows(saved, current) {
 		checks = append(checks, struct {
 			name    string
 			saved   string

@@ -73,6 +73,10 @@ message HibernationProtection {
   string principalID = 9;
   string registrationUID = 10;
   string clusterID = 11;
+  string qualificationSourceKernel = 12;
+  string qualificationTargetKernel = 13;
+  string qualificationNodeUID = 14;
+  string qualificationVMUID = 15;
 }
 
 message HibernationResponse {
