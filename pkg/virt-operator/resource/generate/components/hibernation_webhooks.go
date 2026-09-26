@@ -46,7 +46,7 @@ func hibernationPodWebhook(namespace string) admissionv1.ValidatingWebhook {
 	return hibernationStateWebhook(namespace, "hibernation-state-pods", []admissionv1.RuleWithOperations{
 		{Operations: []admissionv1.OperationType{admissionv1.Create, admissionv1.Update}, Rule: admissionv1.Rule{APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"pods", "pods/ephemeralcontainers"}}},
 		{Operations: []admissionv1.OperationType{admissionv1.Connect}, Rule: admissionv1.Rule{APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"pods/exec", "pods/attach"}}},
-	}, `request.operation == 'CONNECT' || request.subResource == 'ephemeralcontainers' || (object != null && has(object.spec.volumes) && object.spec.volumes.exists(v, has(v.persistentVolumeClaim)))`, true)
+	}, `request.operation == 'CONNECT' || (has(request.subResource) && request.subResource == 'ephemeralcontainers') || (object != null && has(object.spec.volumes) && object.spec.volumes.exists(v, has(v.persistentVolumeClaim)))`, true)
 }
 
 func hibernationPVCWebhook(namespace string) admissionv1.ValidatingWebhook {
