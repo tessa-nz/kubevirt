@@ -53,7 +53,10 @@ func TestHibernationWebhookFiltersAndBootstrapBoundary(t *testing.T) {
 				want            bool
 			}{
 				{"bootstrap api pod", map[string]any{"operation": "CREATE", "subResource": ""}, map[string]any{"spec": map[string]any{"containers": []any{}}}, false},
+				{"ordinary pod without subresource", map[string]any{"operation": "CREATE"}, map[string]any{"spec": map[string]any{"containers": []any{}}}, false},
 				{"PVC pod", map[string]any{"operation": "CREATE", "subResource": ""}, map[string]any{"spec": map[string]any{"volumes": []any{map[string]any{"persistentVolumeClaim": map[string]any{"claimName": "state"}}}}}, true},
+				{"PVC pod without subresource", map[string]any{"operation": "CREATE"}, map[string]any{"spec": map[string]any{"volumes": []any{map[string]any{"persistentVolumeClaim": map[string]any{"claimName": "state"}}}}}, true},
+				{"ephemeral containers", map[string]any{"operation": "UPDATE", "subResource": "ephemeralcontainers"}, map[string]any{"spec": map[string]any{"containers": []any{}}}, true},
 				{"exec", map[string]any{"operation": "CONNECT", "subResource": "exec"}, nil, true},
 			} {
 				result, _, err := compiled.Program.Eval(map[string]any{"request": scenario.request, "object": scenario.object, "oldObject": nil})
